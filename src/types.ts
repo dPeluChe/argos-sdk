@@ -59,3 +59,12 @@ export interface InitOptions {
   /** Emit one `web_vital` event per metric on page hide. Off by default. */
   webVitals?: boolean;
 }
+
+/**
+ * The keys that tie a foreign event to this visit. Named for the tag keys
+ * ingest reads, so the object drops straight onto a Sentry event's `tags`.
+ */
+export interface Correlation {
+  argos_session_id: string;
+  argos_anon_id: string;
+}

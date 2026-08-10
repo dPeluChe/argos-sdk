@@ -296,3 +296,29 @@ describe('automatic capture', () => {
     });
   });
 });
+
+describe('correlation', () => {
+  it('hands out the keys a foreign SDK needs to join this visit', () => {
+    const client = init({ dsn: DSN });
+    const keys = client.correlation();
+
+    // The tag names ingest reads, so the object drops onto a Sentry event as-is.
+    expect(Object.keys(keys).sort()).toEqual(['argos_anon_id', 'argos_session_id']);
+    expect(keys.argos_session_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(keys.argos_anon_id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('reports the same session the events are carrying', async () => {
+    const client = init({ dsn: DSN });
+    const keys = client.correlation();
+
+    client.track('anything');
+    await client.flush();
+
+    // A value that disagreed with the events would tie a Sentry error to a
+    // visit that does not exist, which is worse than not tying it at all.
+    const body = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body ?? '{}'));
+    expect(body.events[0].session_id).toBe(keys.argos_session_id);
+    expect(body.events[0].anon_id).toBe(keys.argos_anon_id);
+  });
+});

@@ -1,6 +1,6 @@
 import { ArgosClient } from './client.js';
 import { instrumentFetch as wrapFetch, type InstrumentFetchOptions } from './instrument.js';
-import type { InitOptions, Props } from './types.js';
+import type { Correlation, InitOptions, Props } from './types.js';
 import type { TraceHeaders } from './trace.js';
 
 export { ArgosClient } from './client.js';
@@ -19,6 +19,7 @@ export {
 export type {
   ArgosEvent,
   AutoPageviewOptions,
+  Correlation,
   EventBatch,
   IdentifyPayload,
   InitOptions,
@@ -52,6 +53,14 @@ export function pageview(path?: string): void {
 
 export function flush(): Promise<void> {
   return current?.flush() ?? Promise.resolve();
+}
+
+/**
+ * The correlation keys, or undefined before `init`. Call it per event rather
+ * than once: the session is renewed after 30 minutes of inactivity.
+ */
+export function correlation(): Correlation | undefined {
+  return current?.correlation();
 }
 
 export function traceHeaders(): TraceHeaders | undefined {

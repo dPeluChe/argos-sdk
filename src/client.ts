@@ -6,7 +6,7 @@ import { createStore } from './storage.js';
 import { baggage, newTrace, traceparent, type TraceHeaders } from './trace.js';
 import { deliver, Transport } from './transport.js';
 import { VitalsCollector } from './vitals.js';
-import type { ArgosEvent, IdentifyPayload, InitOptions, Props } from './types.js';
+import type { Correlation, ArgosEvent, IdentifyPayload, InitOptions, Props } from './types.js';
 
 const MAX_NAME_LENGTH = 200;
 
@@ -85,6 +85,18 @@ export class ArgosClient {
 
   flush(): Promise<void> {
     return this.transport.flush();
+  }
+
+  /**
+   * The correlation keys, for stamping onto an event this SDK does not own —
+   * a Sentry error, say. Read them per event: the session is renewed after
+   * 30 minutes of inactivity, so a value captured once goes stale.
+   */
+  correlation(): Correlation {
+    return {
+      argos_session_id: this.identity.sessionId(),
+      argos_anon_id: this.identity.anonId(),
+    };
   }
 
   /** Headers for an outbound request, so backend events land in the same session. */
