@@ -28,6 +28,16 @@ export interface IdentifyPayload {
   user_id: string;
 }
 
+export interface AutoPageviewOptions {
+  /**
+   * Query parameters that do not identify a page. Replaces the built-in list of
+   * campaign and click ids; `utm_*` is always ignored on top of it.
+   */
+  ignoreParams?: string[];
+  /** Make the hash part of the page identity, for hash-based routers. Off by default. */
+  hashMode?: boolean;
+}
+
 export interface InitOptions {
   /** Sentry-shaped DSN: `https://{publicKey}@{host}/{projectId}`. */
   dsn?: string;
@@ -44,4 +54,8 @@ export interface InitOptions {
   maxBatchSize?: number;
   /** Defaults to 1000. Oldest events are dropped past this. */
   maxBufferSize?: number;
+  /** Emit a `pageview` on load and on SPA navigation. Off by default. */
+  autoPageviews?: boolean | AutoPageviewOptions;
+  /** Emit one `web_vital` event per metric on page hide. Off by default. */
+  webVitals?: boolean;
 }

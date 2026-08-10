@@ -14,6 +14,8 @@ src/
   trace.ts       traceparent and baggage encoding
   transport.ts   buffer, flush triggers, retry policy, sendBeacon
   instrument.ts  the opt-in fetch wrapper and its origin allowlist
+  pageviews.ts   history patching, page identity, SPA pageviews
+  vitals.ts      LCP, CLS, INP, FCP, TTFB on PerformanceObserver
 test/
   setup.ts       storage polyfill, see "Test environment"
 ```
@@ -119,6 +121,70 @@ Baggage carries `argos.session_id` and `argos.anon_id` only, matching the
 example in `../../docs/INGEST_API.md` exactly. `user_id` is deliberately left
 out: the alias is resolved at query time through `identity_map`, so sending it
 on the wire would add a field the backend does not need.
+
+### The page identity rule
+
+`pageKey()` reduces a URL to what a funnel should treat as one page:
+`pathname` plus the query parameters that select content, sorted by name and
+value. Dropped: anything starting with `utm_`, plus the click ids `gclid`,
+`fbclid`, `msclkid`, `ttclid`, `twclid`, `yclid`, `igshid`, `mc_cid`, `mc_eid`,
+`ref` and `_ga`. `ignoreParams` replaces that list; the `utm_` prefix is
+unconditional.
+
+Sorting matters as much as the deny-list: `?a=1&b=2` and `?b=2&a=1` are the
+same page, and a router that rewrites the query in a different order must not
+look like a navigation.
+
+The hash is out by default — `#section` is an anchor, not a page — and
+`hashMode: true` puts it back for hash-based routers.
+
+A capture whose key equals the previous one emits nothing. That is what makes a
+`replaceState` adding `?utm_source=…` after landing free, and it also absorbs
+the double `replaceState` several routers do on mount.
+
+`title` is read synchronously at navigation time. A router that sets the title
+in an effect after render will have the previous title on that event; deferring
+the capture to fix it would break the "exactly one pageview per navigation"
+guarantee in a worse way, so the trade is made in favour of the count.
+
+The originals are restored on `close()`. A patched `history` surviving a hot
+reload double-counts every navigation, and there is no way to detect it from
+inside.
+
+### Web vitals semantics
+
+Each metric has a termination rule, and getting it wrong yields plausible wrong
+numbers:
+
+- **LCP** — last `largest-contentful-paint` entry, frozen at the first
+  `keydown` / `click` / `pointerdown`, or at page hide if none came. Freezing
+  on load instead would report an element the user never waited for.
+- **CLS** — the worst _session window_, not the page total. A shift joins the
+  current window while it is within 1s of the previous shift and 5s of the
+  window start; otherwise it opens a new one. Entries with `hadRecentInput` are
+  the user's own doing and are skipped.
+- **INP** — the ten longest interactions are kept, keyed by `interactionId`
+  (the largest duration per id), and the reported value steps one rank down per
+  50 interactions: the worst interaction on a quiet page, roughly the 98th
+  percentile on a busy one. `event` entries are observed with
+  `durationThreshold: 40`.
+- **FCP** — the `first-contentful-paint` paint entry, first one wins.
+- **TTFB** — `responseStart` of the navigation entry.
+
+Everything is reported once, on page hide, through the normal `track()` path,
+so the vitals ride the same `sendBeacon` batch as the buffered events. The
+hidden handler finalizes before it flushes; that ordering is the whole point.
+
+Every `observe()` sits in its own `try`, so an unsupported entry type — `event`
+on Safari — costs that one metric and nothing else. CLS is reported even at
+zero, because a stable page is a real measurement; INP is not, because "no
+interaction" is not an interaction of 0 ms.
+
+### Why the flush timer is unref'd
+
+`setInterval` keeps the Node event loop alive: a script that calls `init()` and
+never calls `close()` would hang forever. Browsers return a number from
+`setInterval` and have no `unref`, so the call is optional-chained.
 
 ### Test environment
 

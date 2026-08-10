@@ -217,3 +217,82 @@ describe('the module-level api', () => {
     expect(sentEvents()).toHaveLength(1);
   });
 });
+
+describe('automatic capture', () => {
+  const originalPushState = globalThis.history.pushState;
+
+  afterEach(() => {
+    globalThis.history.pushState = originalPushState;
+    originalPushState.call(globalThis.history, {}, '', '/');
+  });
+
+  it('stays quiet unless the options ask for it', async () => {
+    const client = new ArgosClient({ dsn: DSN });
+    globalThis.history.pushState({}, '', '/pricing');
+    await client.flush();
+    client.close();
+    expect(sentEvents()).toHaveLength(0);
+  });
+
+  it('emits contract-shaped pageviews on load and on SPA navigation', async () => {
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: true });
+    globalThis.history.pushState({}, '', '/pricing?utm_source=x');
+    await client.flush();
+    client.close();
+
+    const events = sentEvents();
+    expect(events.map((event) => event.name)).toEqual(['pageview', 'pageview']);
+    expect(events[1].props).toMatchObject({ path: '/pricing', previous_path: '/' });
+    expect(events[0].session_id).toBe(events[1].session_id);
+  });
+
+  it('takes pageview options through the same flag', async () => {
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: { hashMode: true } });
+    globalThis.history.pushState({}, '', '/#/orders');
+    await client.flush();
+    client.close();
+    expect(sentEvents()[1].props).toMatchObject({ path: '/#/orders' });
+  });
+
+  it('unpatches history on close', () => {
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: true });
+    expect(globalThis.history.pushState).not.toBe(originalPushState);
+    client.close();
+    expect(globalThis.history.pushState).toBe(originalPushState);
+  });
+
+  it('batches the vitals into the unload flush', async () => {
+    const sendBeacon = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('navigator', { sendBeacon });
+    const observers: ((entries: unknown[]) => void)[] = [];
+    vi.stubGlobal(
+      'PerformanceObserver',
+      class {
+        constructor(private readonly handler: (list: { getEntries: () => unknown[] }) => void) {}
+        observe(init: { type: string }): void {
+          if (init.type !== 'paint') return;
+          observers.push((entries) => {
+            this.handler({ getEntries: () => entries });
+          });
+        }
+        disconnect(): void {}
+      },
+    );
+
+    const client = new ArgosClient({ dsn: DSN, webVitals: true });
+    for (const deliver of observers) {
+      deliver([{ name: 'first-contentful-paint', startTime: 1234 }]);
+    }
+    globalThis.dispatchEvent(new Event('pagehide'));
+    client.close();
+
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    const [, blob] = sendBeacon.mock.calls[0] as [string, Blob];
+    const batch = JSON.parse(await blob.text()) as EventBatch;
+    expect(batch.events.map((event) => event.name)).toEqual(['web_vital', 'web_vital']);
+    expect(batch.events.map((event) => event.props?.metric)).toEqual(['CLS', 'FCP']);
+    expect(batch.events[1]).toMatchObject({
+      props: { metric: 'FCP', value: 1234, rating: 'good', path: '/' },
+    });
+  });
+});

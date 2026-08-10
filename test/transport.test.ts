@@ -200,3 +200,28 @@ describe('the unload flush', () => {
     expect(sendBeacon).not.toHaveBeenCalled();
   });
 });
+
+describe('the flush timer', () => {
+  it('unrefs the interval so a Node process can still exit', () => {
+    const unref = vi.fn();
+    const handle = { unref } as unknown as ReturnType<typeof setInterval>;
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockReturnValue(handle);
+    const transport = new Transport(config());
+    transport.start();
+
+    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    expect(unref).toHaveBeenCalledTimes(1);
+    transport.stop();
+  });
+
+  it('accepts a browser handle, which is a number with no unref', () => {
+    vi.spyOn(globalThis, 'setInterval').mockReturnValue(
+      7 as unknown as ReturnType<typeof setInterval>,
+    );
+    const transport = new Transport(config());
+    expect(() => {
+      transport.start();
+    }).not.toThrow();
+    transport.stop();
+  });
+});

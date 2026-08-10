@@ -100,7 +100,10 @@ export class Transport {
 
   start(): void {
     this.stop();
-    this.timer = setInterval(() => void this.flush(), this.config.flushIntervalMs);
+    const timer = setInterval(() => void this.flush(), this.config.flushIntervalMs);
+    // A pending interval keeps a Node process alive; browsers return a number with no unref.
+    (timer as { unref?: () => void }).unref?.();
+    this.timer = timer;
   }
 
   stop(): void {

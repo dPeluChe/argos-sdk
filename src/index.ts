@@ -8,7 +8,22 @@ export { parseDsn, type Endpoint } from './dsn.js';
 export { SESSION_IDLE_MS } from './session.js';
 export { baggage, traceparent, newTrace, type TraceContext, type TraceHeaders } from './trace.js';
 export { isAllowedOrigin, type InstrumentFetchOptions } from './instrument.js';
-export type { ArgosEvent, EventBatch, IdentifyPayload, InitOptions, Props } from './types.js';
+export { pageKey, PageviewTracker } from './pageviews.js';
+export {
+  rate,
+  VitalsCollector,
+  type VitalName,
+  type VitalRating,
+  type VitalReport,
+} from './vitals.js';
+export type {
+  ArgosEvent,
+  AutoPageviewOptions,
+  EventBatch,
+  IdentifyPayload,
+  InitOptions,
+  Props,
+} from './types.js';
 
 let current: ArgosClient | undefined;
 

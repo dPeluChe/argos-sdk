@@ -13,12 +13,17 @@ jobs:
   check:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '22', '24']
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       - name: install
@@ -35,3 +40,10 @@ jobs:
 
       - name: build
         run: npm run build
+
+      # The flush timer must not keep a Node process alive. Fails by hanging.
+      - name: node exits after init
+        timeout-minutes: 1
+        run: >
+          node --input-type=module -e "import('./dist/index.js').then((sdk) =>
+          sdk.init({ dsn: 'https://a1b2c3@ingest.invalid/42' }))"

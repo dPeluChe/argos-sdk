@@ -22,6 +22,8 @@ export default [
   {
     files: ['test/**/*.ts'],
     rules: {
+      // The history patch tests compare method identity; that is the assertion.
+      '@typescript-eslint/unbound-method': 'off',
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',

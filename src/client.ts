@@ -1,9 +1,11 @@
 import { eventsUrl, identifyUrl, resolveEndpoint, type Endpoint } from './dsn.js';
 import { uuidv4 } from './ids.js';
+import { PageviewTracker } from './pageviews.js';
 import { Identity } from './session.js';
 import { createStore } from './storage.js';
 import { baggage, newTrace, traceparent, type TraceHeaders } from './trace.js';
 import { deliver, Transport } from './transport.js';
+import { VitalsCollector } from './vitals.js';
 import type { ArgosEvent, IdentifyPayload, InitOptions, Props } from './types.js';
 
 const MAX_NAME_LENGTH = 200;
@@ -15,6 +17,8 @@ export class ArgosClient {
   private readonly environment: string;
   private readonly release: string | undefined;
   private readonly detach: () => void;
+  private readonly pageviews: PageviewTracker | undefined;
+  private readonly vitals: VitalsCollector | undefined;
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
@@ -29,9 +33,35 @@ export class ArgosClient {
       maxBufferSize: options.maxBufferSize ?? 1_000,
     });
     this.transport.start();
+    // Vitals report into the same batch the unload flush is about to send.
     this.detach = onPageHidden(() => {
+      this.vitals?.finalize();
       this.transport.flushOnUnload();
     });
+
+    if (options.autoPageviews) {
+      this.pageviews = new PageviewTracker(
+        (props) => {
+          this.track('pageview', props);
+        },
+        typeof options.autoPageviews === 'object' ? options.autoPageviews : {},
+      );
+      this.pageviews.start();
+    }
+
+    if (options.webVitals === true) {
+      this.vitals = new VitalsCollector((report) => {
+        const props: Props = {
+          metric: report.metric,
+          value: report.value,
+          rating: report.rating,
+        };
+        const path = (globalThis.location as Location | undefined)?.pathname;
+        if (path) props.path = path;
+        this.track('web_vital', props);
+      });
+      this.vitals.start();
+    }
   }
 
   track(name: string, props?: Props): void {
@@ -70,6 +100,8 @@ export class ArgosClient {
 
   close(): void {
     this.detach();
+    this.pageviews?.stop();
+    this.vitals?.stop();
     this.transport.stop();
   }
 

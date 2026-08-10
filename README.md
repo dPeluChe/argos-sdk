@@ -80,6 +80,42 @@ than use the module-level singleton.
 | `flushIntervalMs` | `5000`       |                                                              |
 | `maxBatchSize`    | `50`         | Also the trigger for an immediate flush                      |
 | `maxBufferSize`   | `1000`       | Past this the oldest events are dropped and counted          |
+| `autoPageviews`   | `false`      | `true` or `{ ignoreParams, hashMode }` — see below           |
+| `webVitals`       | `false`      | One `web_vital` event per metric, on page hide               |
+
+### Automatic pageviews
+
+```ts
+init({ dsn, autoPageviews: true });
+```
+
+Fires on load, on `history.pushState` / `replaceState`, and on `popstate`.
+Props: `path`, `title`, `referrer`, `previous_path`.
+
+A pageview is emitted only when the **page identity** changes. That identity is
+the pathname plus the query parameters that select content, sorted; `utm_*` and
+the usual click ids (`gclid`, `fbclid`, …) are dropped, and so is the hash.
+A `replaceState` that only rewrites campaign parameters is therefore the same
+page, not a second pageview.
+
+| Option         | Default   | Notes                                                              |
+| -------------- | --------- | ------------------------------------------------------------------ |
+| `ignoreParams` | click ids | Replaces the built-in list; `utm_*` is always ignored on top of it |
+| `hashMode`     | `false`   | Make the hash part of the identity, for hash-based routers         |
+
+`close()` restores the original `pushState` and `replaceState`.
+
+### Web vitals
+
+```ts
+init({ dsn, webVitals: true });
+```
+
+LCP, CLS, INP, FCP and TTFB, read straight from `PerformanceObserver` — no
+`web-vitals` dependency. Each metric is reported **once**, on page hide, as
+`track('web_vital', { metric, value, rating, path })`, riding the same unload
+batch as everything else. An entry type the browser does not support (INP on
+Safari) is skipped silently.
 
 ### instrumentFetch options
 
