@@ -20,9 +20,17 @@ implemented here rather than pulled in.
 
 ## Install
 
+Not published to a registry yet — `npm install @argos/browser` returns a 404.
+Install it from the repository, which builds on install through the `prepare`
+script:
+
 ```bash
-npm install @argos/browser
+npm install github:dPeluChe/argos-sdk
 ```
+
+The package name stays `@argos/browser`, so every import below is unchanged.
+Verified from a clean directory: npm clones, runs the build and resolves
+`dist/`.
 
 ## Quick start
 
