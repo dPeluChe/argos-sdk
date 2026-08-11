@@ -8,6 +8,7 @@ export { parseDsn, type Endpoint } from './dsn.js';
 export { SESSION_IDLE_MS } from './session.js';
 export { baggage, traceparent, newTrace, type TraceContext, type TraceHeaders } from './trace.js';
 export { isAllowedOrigin, type InstrumentFetchOptions } from './instrument.js';
+export { browserProps, campaignProps } from './context.js';
 export { pageKey, PageviewTracker } from './pageviews.js';
 export {
   rate,

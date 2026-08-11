@@ -117,8 +117,13 @@ export class PageviewTracker {
     const document = globalThis.document as Document | undefined;
     const props: Props = { path: key };
     if (document?.title) props.title = document.title;
-    if (document?.referrer) props.referrer = document.referrer;
-    if (this.previous !== undefined) props.previous_path = this.previous;
+    // `document.referrer` never changes on SPA navigation: repeating it would
+    // make every route change look like it arrived from the external source.
+    if (this.previous === undefined) {
+      if (document?.referrer) props.referrer = document.referrer;
+    } else {
+      props.previous_path = this.previous;
+    }
 
     this.previous = key;
     this.emit(props);

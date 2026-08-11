@@ -15,6 +15,7 @@ src/
   transport.ts   buffer, flush triggers, retry policy, sendBeacon
   instrument.ts  the opt-in fetch wrapper and its origin allowlist
   pageviews.ts   history patching, page identity, SPA pageviews
+  context.ts     campaign parameters and the browser-only entry context
   vitals.ts      LCP, CLS, INP, FCP, TTFB on PerformanceObserver
 test/
   setup.ts       storage polyfill, see "Test environment"
@@ -150,6 +151,83 @@ guarantee in a worse way, so the trade is made in favour of the count.
 The originals are restored on `close()`. A patched `history` surviving a hot
 reload double-counts every navigation, and there is no way to detect it from
 inside.
+
+### Attribution is not page identity
+
+Two jobs share the same query string and must not share the same rule.
+
+`pageKey()` answers _"is this the same page"_ and therefore drops `utm_*` and
+the click ids: arriving with a campaign tag is not a different page. Attribution
+answers _"where did this visit come from"_ and needs exactly those parameters.
+The rule that identifies a page stays untouched; the campaign list in
+`context.ts` is deliberately a second, separate list — `ignoreParams` may
+replace the pageview one, and it must not be able to switch off reporting.
+
+`utm_source`, `utm_medium`, `utm_campaign`, `utm_content` and `utm_term` are
+read from the live URL on **every** pageview and never remembered. A value is
+sent only when it is there and non-blank, so absence stays absence rather than
+becoming an empty string, and a second pageview without a campaign carries
+none. Nothing client-side decides which one counts: the SDK reports what the
+URL says and the server keeps the first per session. That also handles the case
+a client-side memory would get wrong — a user who leaves and re-enters mid-visit
+through a different ad genuinely produced a second campaign, and the server
+should see it.
+
+Values are trimmed and capped at 200 characters, the same limit event names get.
+
+#### Click ids: the network, not the id
+
+`gclid`, `fbclid`, `msclkid`, `ttclid`, `twclid` and `yclid` are reported as
+`click_id_source: 'gclid'` — the parameter name only, never its value.
+
+Reporting nothing was the wrong answer. Google Ads auto-tagging sends `gclid`
+with no `utm_*` at all by default, and Meta does the same with `fbclid`; a
+platform that ignores them files a large share of paid traffic as direct, which
+is the exact question this feature exists to answer. Reporting the value was
+also wrong: a click id is an opaque per-click identifier whose only real use is
+uploading conversions back to the ad network — a job Argos does not do — and
+storing one raises the privacy weight of every session row for a column nobody
+queries. The parameter name is one short, low-cardinality string, present only
+on paid entries, and it carries the whole analytical signal.
+
+`_ga`, `ref`, `igshid`, `mc_cid` and `mc_eid` stay out even though `pageKey()`
+drops them too. `_ga` is a cross-domain session linker, not a click; `ref` is an
+unspecified free-for-all any site sets to anything; `igshid` rides every shared
+Instagram link, paid or not; and Mailchimp already sends real `utm_*`.
+
+### The entry context
+
+`referrer`, `screen_width`, `screen_height`, `viewport_width`,
+`viewport_height` and `language` go out **once per visit**, on the first
+pageview. `Identity.claimEntry()` holds the flag in `sessionStorage` keyed by
+the session id, so it renews with the session and an MPA does not resend the
+same six fields on every page load.
+
+They are here because no request header carries them: ingest parses the
+User-Agent for `browser`, `os` and `device_type`, but a UA string has never
+contained a screen size or a viewport. `language` duplicates `Accept-Language`
+in principle, and is sent anyway — it is five bytes once a visit, it is the
+single resolved locale rather than a weighted list, and it survives a CDN or
+proxy that normalizes the header away.
+
+Unlike the campaign tags, these are gated: a screen does not change mid-visit,
+so a second copy is pure cost.
+
+`referrer` moved to the entry for the same reason plus a correctness one:
+`document.referrer` does not change on SPA navigation, so repeating it made
+every route change look like it arrived from the external source. Internal
+movement is already described by `previous_path`.
+
+Rejected, each of them cheap and none of them worth a field on every visit:
+timezone (the IP already places the visitor, and it is a fingerprinting
+surface), `devicePixelRatio`, `screen.colorDepth`, `navigator.connection`,
+`hardwareConcurrency` and `deviceMemory` (fingerprinting entropy with no
+analytics screen behind it), and anything the server already derives from the
+User-Agent.
+
+Everything degrades to absence: a missing `screen`, `navigator` or window
+dimension drops those keys instead of sending zeros, and no `location` at all
+produces a pageview with no attribution rather than an exception.
 
 ### Web vitals semantics
 

@@ -7,6 +7,7 @@ const ANON_ID = 'argos.anon_id';
 const SESSION_ID = 'argos.session_id';
 const SEEN_AT = 'argos.session_seen_at';
 const USER_ID = 'argos.user_id';
+const ENTRY_SENT = 'argos.entry_sent';
 
 /**
  * `anon_id` lives in localStorage (one device), `session_id` in sessionStorage
@@ -41,6 +42,17 @@ export class Identity {
     }
     this.session.set(SEEN_AT, String(at));
     return id;
+  }
+
+  /**
+   * True for the first caller of each visit, false after. Keyed by session id,
+   * so a session renewed past the idle window is a new entry.
+   */
+  claimEntry(): boolean {
+    const sessionId = this.sessionId();
+    if (this.session.get(ENTRY_SENT) === sessionId) return false;
+    this.session.set(ENTRY_SENT, sessionId);
+    return true;
   }
 
   userId(): string | undefined {

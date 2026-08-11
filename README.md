@@ -57,7 +57,7 @@ init({ projectId: '42', publicKey: 'a1b2c3d4e5f6', host: 'https://ingest.argos.d
 | --------------------------- | ------------------------------------------------------------------------- |
 | `init(options)`             | Creates the client, starts the flush timer, returns it                    |
 | `track(name, props?)`       | Queues a product event                                                    |
-| `pageview(path?)`           | `track('pageview', { path, referrer })`; defaults to `location.pathname`  |
+| `pageview(path?)`           | `track('pageview', …)` with attribution; defaults to `location.pathname`  |
 | `identify(userId)`          | Writes the `anon_id → user_id` alias and stamps `user_id` on later events |
 | `flush()`                   | Sends everything buffered; resolves when the queue drains                 |
 | `traceHeaders()`            | `{ traceparent, baggage }` for one outbound request                       |
@@ -90,7 +90,7 @@ init({ dsn, autoPageviews: true });
 ```
 
 Fires on load, on `history.pushState` / `replaceState`, and on `popstate`.
-Props: `path`, `title`, `referrer`, `previous_path`.
+Props: `path`, `title`, `previous_path`, plus the attribution below.
 
 A pageview is emitted only when the **page identity** changes. That identity is
 the pathname plus the query parameters that select content, sorted; `utm_*` and
@@ -104,6 +104,37 @@ page, not a second pageview.
 | `hashMode`     | `false`   | Make the hash part of the identity, for hash-based routers         |
 
 `close()` restores the original `pushState` and `replaceState`.
+
+### Attribution
+
+Every pageview — automatic or from `pageview()` — carries the campaign
+parameters of the **current** URL, when they are there:
+
+| Prop                                                                  | When                                                           |
+| --------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term` | Present and non-blank in the URL, trimmed, capped at 200 chars |
+| `click_id_source`                                                     | An ad-network click id is present: `gclid`, `fbclid`, …        |
+
+Nothing is remembered between pageviews: a second pageview without a campaign
+sends none, and the server keeps the first one of the session. `click_id_source`
+is the **parameter name only** — the click id value itself is never sent.
+
+Reporting these is not the same thing as identifying a page. `pageKey()` still
+strips `utm_*` and the click ids, so a campaign-tagged landing is the same page
+as an untagged one.
+
+And once per visit, on the first pageview, what no request header carries:
+
+| Prop                                | Source                           |
+| ----------------------------------- | -------------------------------- |
+| `referrer`                          | `document.referrer` at the entry |
+| `screen_width`, `screen_height`     | `screen`                         |
+| `viewport_width`, `viewport_height` | `innerWidth` / `innerHeight`     |
+| `language`                          | `navigator.language`             |
+
+Browser, OS and device type are not sent: ingest reads them from the
+User-Agent. Anything the browser does not expose is left out rather than sent
+as zero. Details and what was rejected: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ### Web vitals
 

@@ -1,3 +1,4 @@
+import { browserProps, campaignProps } from './context.js';
 import { eventsUrl, identifyUrl, resolveEndpoint, type Endpoint } from './dsn.js';
 import { uuidv4 } from './ids.js';
 import { PageviewTracker } from './pageviews.js';
@@ -42,7 +43,7 @@ export class ArgosClient {
     if (options.autoPageviews) {
       this.pageviews = new PageviewTracker(
         (props) => {
-          this.track('pageview', props);
+          this.track('pageview', this.pageviewProps(props));
         },
         typeof options.autoPageviews === 'object' ? options.autoPageviews : {},
       );
@@ -73,7 +74,19 @@ export class ArgosClient {
     const props: Props = { path: path ?? loc?.pathname ?? '/' };
     const referrer = (globalThis.document as Document | undefined)?.referrer;
     if (referrer) props.referrer = referrer;
-    this.track('pageview', props);
+    this.track('pageview', this.pageviewProps(props));
+  }
+
+  /**
+   * Campaign tags are re-read from the live URL every time and never
+   * remembered, so a later pageview without one reports none and the server
+   * keeps the first. Screen and language cannot change mid-visit: once is enough.
+   */
+  private pageviewProps(props: Props): Props {
+    const search = (globalThis.location as Location | undefined)?.search ?? '';
+    const enriched: Props = { ...props, ...campaignProps(search) };
+    if (this.identity.claimEntry()) Object.assign(enriched, browserProps());
+    return enriched;
   }
 
   /** Stamps `user_id` on later events and writes the alias. Past events are never rewritten. */
