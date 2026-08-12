@@ -2,6 +2,7 @@ import { browserProps, campaignProps } from './context.js';
 import { eventsUrl, identifyUrl, resolveEndpoint, type Endpoint } from './dsn.js';
 import { uuidv4 } from './ids.js';
 import { PageviewTracker } from './pageviews.js';
+import { Consent, type ConsentState } from './consent.js';
 import { Identity } from './session.js';
 import { createStore } from './storage.js';
 import { baggage, newTrace, traceparent, type TraceHeaders } from './trace.js';
@@ -13,6 +14,7 @@ const MAX_NAME_LENGTH = 200;
 
 export class ArgosClient {
   private readonly endpoint: Endpoint;
+  private readonly consent: Consent;
   private readonly identity: Identity;
   private readonly transport: Transport;
   private readonly environment: string;
@@ -23,7 +25,9 @@ export class ArgosClient {
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
-    this.identity = new Identity(createStore('localStorage'), createStore('sessionStorage'));
+    const local = createStore('localStorage');
+    this.consent = new Consent(local, options.requireConsent ?? false);
+    this.identity = new Identity(local, createStore('sessionStorage'));
     this.environment = options.environment ?? 'production';
     this.release = options.release;
     this.transport = new Transport({
@@ -66,6 +70,10 @@ export class ArgosClient {
   }
 
   track(name: string, props?: Props): void {
+    // Checked here rather than in the transport: `buildEvent` reads the
+    // identity, and reading it is what creates and stores an `anon_id`. The
+    // gate has to sit in front of that, not in front of the send.
+    if (!this.consent.allowed()) return;
     this.transport.enqueue(this.buildEvent(name, props));
   }
 
@@ -91,9 +99,26 @@ export class ArgosClient {
 
   /** Stamps `user_id` on later events and writes the alias. Past events are never rewritten. */
   identify(userId: string): void {
+    if (!this.consent.allowed()) return;
     this.identity.setUserId(userId);
     const payload: IdentifyPayload = { anon_id: this.identity.anonId(), user_id: userId };
     void deliver(identifyUrl(this.endpoint), this.endpoint.publicKey, JSON.stringify(payload));
+  }
+
+  /** The visitor said yes. Events from here on are collected; the ones before
+   *  it are gone on purpose. */
+  grantConsent(): void {
+    this.consent.grant();
+  }
+
+  /** The visitor said no, and it sticks across installs that do not require a
+   *  gate — see `Consent.revoke`. */
+  revokeConsent(): void {
+    this.consent.revoke();
+  }
+
+  consentState(): ConsentState {
+    return this.consent.state();
   }
 
   flush(): Promise<void> {

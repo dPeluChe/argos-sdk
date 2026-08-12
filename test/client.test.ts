@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ArgosClient } from '../src/client.js';
-import { close, flush, init, pageview, track, traceHeaders } from '../src/index.js';
+import { close, flush, identify, init, pageview, track, traceHeaders } from '../src/index.js';
+import { parseDsn } from '../src/dsn.js';
 import type { ArgosEvent, EventBatch, IdentifyPayload } from '../src/types.js';
 
 const DSN = 'https://a1b2c3@ingest.argos.dev/42';
@@ -297,9 +298,17 @@ describe('automatic capture', () => {
   });
 });
 
+/** `init` can answer `undefined` now, which is the point of it never throwing.
+ *  A valid DSN is not that case, and every test here uses one. */
+function started(): ArgosClient {
+  const client = init({ dsn: DSN });
+  if (!client) throw new Error('a valid DSN must start a client');
+  return client;
+}
+
 describe('correlation', () => {
   it('hands out the keys a foreign SDK needs to join this visit', () => {
-    const client = init({ dsn: DSN });
+    const client = started();
     const keys = client.correlation();
 
     // The tag names ingest reads, so the object drops onto a Sentry event as-is.
@@ -309,7 +318,7 @@ describe('correlation', () => {
   });
 
   it('reports the same session the events are carrying', async () => {
-    const client = init({ dsn: DSN });
+    const client = started();
     const keys = client.correlation();
 
     client.track('anything');
@@ -320,5 +329,53 @@ describe('correlation', () => {
     const body = JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body ?? '{}'));
     expect(body.events[0].session_id).toBe(keys.argos_session_id);
     expect(body.events[0].anon_id).toBe(keys.argos_anon_id);
+  });
+});
+
+describe('init never breaking the host app', () => {
+  it('survives a DSN nobody can parse', () => {
+    const errors: unknown[][] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+
+    try {
+      // The one call that runs first, on a value typed by hand into an
+      // environment variable. A typo here must not stop an app booting.
+      expect(() => init({ dsn: 'not-a-dsn-at-all' })).not.toThrow();
+      expect(init({ dsn: 'not-a-dsn-at-all' })).toBeUndefined();
+      expect(errors.length).toBeGreaterThan(0);
+    } finally {
+      console.error = original;
+    }
+  });
+
+  it('sends nothing at all once it has failed', async () => {
+    const original = console.error;
+    console.error = () => undefined;
+    const calls: string[] = [];
+    const fetchSpy = vi.fn((url: string) => {
+      calls.push(url);
+      return Promise.resolve(new Response(null, { status: 202 }));
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    try {
+      init({ dsn: 'https://missing-key@host' });
+      track('checkout_started');
+      identify('user_1');
+      await flush();
+
+      // Not "queued and dropped later" — never accepted in the first place.
+      expect(calls).toEqual([]);
+    } finally {
+      console.error = original;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('still throws for a caller validating a DSN on purpose', () => {
+    // The interface uses this to tell someone their DSN is wrong while they
+    // type it. That is a different job from starting a client.
+    expect(() => parseDsn('not-a-dsn-at-all')).toThrow(/argos: DSN/);
   });
 });

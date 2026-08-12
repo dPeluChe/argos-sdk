@@ -58,6 +58,14 @@ export interface InitOptions {
   autoPageviews?: boolean | AutoPageviewOptions;
   /** Emit one `web_vital` event per metric on page hide. Off by default. */
   webVitals?: boolean;
+  /**
+   * Store nothing and send nothing until `grantConsent()` is called.
+   *
+   * Off by default, so upgrading does not silently stop an install's data
+   * arriving. A refusal is sticky either way: once `revokeConsent()` has been
+   * called, this being off does not resume collection.
+   */
+  requireConsent?: boolean;
 }
 
 /**
