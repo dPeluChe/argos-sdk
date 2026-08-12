@@ -3,7 +3,10 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
 export default [
-  { ignores: ['dist', 'coverage', 'node_modules'] },
+  // scripts/ is build tooling for node, not shipped code: the browser globals
+  // and type-aware rules here do not describe it, and `npm run size` executes
+  // it on every check, which is the coverage that matters for forty lines.
+  { ignores: ['dist', 'coverage', 'node_modules', 'scripts'] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {

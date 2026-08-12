@@ -10,6 +10,9 @@ export interface ArgosEvent {
   session_id: string;
   anon_id: string;
   user_id?: string;
+  /** The tenant this event happened in. Stamped from the sticky value set by
+   *  `account()`, absent when nothing set one. */
+  account_id?: string;
   trace_id: string;
   span_id: string;
   release?: string;

@@ -1,3 +1,4 @@
+import type { Outbox } from './outbox.js';
 import type { ArgosEvent, EventBatch } from './types.js';
 
 export const MAX_ATTEMPTS = 5;
@@ -75,6 +76,9 @@ export interface TransportConfig {
   flushIntervalMs: number;
   maxBatchSize: number;
   maxBufferSize: number;
+  /** Where a batch goes when the network refused it for good, and where the
+   *  next visit looks first. Absent in tests that do not care. */
+  outbox?: Outbox;
 }
 
 export class Transport {
@@ -100,6 +104,11 @@ export class Transport {
 
   start(): void {
     this.stop();
+    // Whatever the last visit could not deliver goes out first: it is the
+    // oldest, and the acceptance window it has to reach is a fixed distance
+    // from now, not from when it was queued.
+    const waiting = this.config.outbox?.take() ?? [];
+    if (waiting.length > 0) this.buffer.unshift(...waiting);
     const timer = setInterval(() => void this.flush(), this.config.flushIntervalMs);
     // A pending interval keeps a Node process alive; browsers return a number with no unref.
     (timer as { unref?: () => void }).unref?.();
@@ -120,7 +129,15 @@ export class Transport {
   private async drain(): Promise<void> {
     while (this.buffer.length > 0) {
       const batch = this.buffer.splice(0, this.config.maxBatchSize);
-      await deliver(this.config.url, this.config.publicKey, encode(batch));
+      const delivered = await deliver(this.config.url, this.config.publicKey, encode(batch));
+      if (delivered) continue;
+      // `deliver` has already retried everything worth retrying. Keeping the
+      // rest of the buffer in memory and looping would spend the visitor's
+      // battery on a network that is not there; it waits on disk for the next
+      // visit instead. Resending later is free -- ingest deduplicates on the
+      // event's own id and time.
+      this.config.outbox?.save([...batch, ...this.buffer.splice(0, this.buffer.length)]);
+      return;
     }
   }
 
@@ -136,6 +153,9 @@ export class Transport {
     const nav = globalThis.navigator as Partial<Navigator> | undefined;
     const beacon = nav?.sendBeacon?.bind(nav);
     if (beacon?.(url, new Blob([body], { type: JSON_TYPE }))) return;
+    // The page is going. This fetch cannot report back, so the batch is also
+    // written down: a duplicate costs nothing and a loss cannot be undone.
+    this.config.outbox?.save(batch);
     void fetch(url, {
       method: 'POST',
       keepalive: true,

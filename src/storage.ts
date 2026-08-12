@@ -3,6 +3,7 @@ export type StorageKind = 'localStorage' | 'sessionStorage';
 export interface KeyValueStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
+  remove(key: string): void;
 }
 
 const PROBE_KEY = '__argos_probe__';
@@ -38,6 +39,15 @@ export function createStore(kind: StorageKind): KeyValueStore {
         // Quota exceeded mid-session: memory already holds it, degrade quietly.
       }
     },
+    remove(key) {
+      memory.delete(key);
+      try {
+        backing?.removeItem(key);
+      } catch {
+        // Same as `set`: the in-memory copy is already gone, which is what
+        // this tab will read for the rest of its life.
+      }
+    },
   };
 }
 
@@ -46,5 +56,8 @@ export function memoryStore(): KeyValueStore {
   return {
     get: (key) => memory.get(key) ?? null,
     set: (key, value) => void memory.set(key, value),
+    remove: (key) => {
+      memory.delete(key);
+    },
   };
 }

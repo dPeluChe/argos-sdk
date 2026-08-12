@@ -3,6 +3,7 @@ import { eventsUrl, identifyUrl, resolveEndpoint, type Endpoint } from './dsn.js
 import { uuidv4 } from './ids.js';
 import { PageviewTracker } from './pageviews.js';
 import { Consent, type ConsentState } from './consent.js';
+import { Outbox } from './outbox.js';
 import { Identity } from './session.js';
 import { createStore } from './storage.js';
 import { baggage, newTrace, traceparent, type TraceHeaders } from './trace.js';
@@ -36,6 +37,7 @@ export class ArgosClient {
       flushIntervalMs: options.flushIntervalMs ?? 5_000,
       maxBatchSize: options.maxBatchSize ?? 50,
       maxBufferSize: options.maxBufferSize ?? 1_000,
+      outbox: new Outbox(local),
     });
     this.transport.start();
     // Vitals report into the same batch the unload flush is about to send.
@@ -98,6 +100,29 @@ export class ArgosClient {
   }
 
   /** Stamps `user_id` on later events and writes the alias. Past events are never rewritten. */
+  /**
+   * The tenant this visit belongs to: the workspace, company or team inside
+   * the instrumented application. Sticky like the anon id, so every later
+   * event carries it without being told again, and cleared by `signOut`.
+   *
+   * Pass a **stable identifier** — the row id, a UUID — never a display name.
+   * It is stored opaquely and never normalised, so `Acme`, `acme` and `acme `
+   * are three different tenants for the rest of time.
+   */
+  account(accountId: string): void {
+    // Behind the same gate as everything else: setting an account writes to
+    // this browser, and writing before consent is the thing the gate exists
+    // to stop.
+    if (!this.consent.allowed()) return;
+    this.identity.setAccount(accountId);
+  }
+
+  /** Forgets who this is — the person and the tenant — without touching the
+   *  anon id, which is about the device and not about them. */
+  signOut(): void {
+    this.identity.clearUser();
+  }
+
   identify(userId: string): void {
     if (!this.consent.allowed()) return;
     this.identity.setUserId(userId);
@@ -171,6 +196,8 @@ export class ArgosClient {
     };
     const userId = this.identity.userId();
     if (userId) event.user_id = userId;
+    const accountId = this.identity.accountId();
+    if (accountId) event.account_id = accountId;
     if (this.release) event.release = this.release;
     if (props) event.props = props;
     return event;

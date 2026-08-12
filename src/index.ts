@@ -72,6 +72,16 @@ export function track(name: string, props?: Props): void {
   current?.track(name, props);
 }
 
+/** The tenant this visit belongs to. Pass a stable identifier, never a display
+ *  name — see `ArgosClient.account`. */
+export function account(accountId: string): void {
+  current?.account(accountId);
+}
+
+export function signOut(): void {
+  current?.signOut();
+}
+
 export function identify(userId: string): void {
   current?.identify(userId);
 }
