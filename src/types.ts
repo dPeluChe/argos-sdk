@@ -17,7 +17,9 @@ export interface ArgosEvent {
   span_id: string;
   release?: string;
   environment?: string;
-  platform: 'browser';
+  /** Where the event was produced. The wire takes any string; these are the
+   *  two this SDK emits. */
+  platform: 'browser' | 'server';
   props?: Props;
 }
 

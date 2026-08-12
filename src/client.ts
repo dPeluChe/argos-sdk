@@ -166,9 +166,14 @@ export class ArgosClient {
   traceHeaders(): TraceHeaders {
     return {
       traceparent: traceparent(newTrace()),
+      // The user and the tenant travel too, so a server that continues this
+      // visit stamps them without being told again. Same-origin only, which
+      // `instrumentFetch` enforces before these are ever attached.
       baggage: baggage({
         'argos.session_id': this.identity.sessionId(),
         'argos.anon_id': this.identity.anonId(),
+        'argos.user_id': this.identity.userId(),
+        'argos.account_id': this.identity.accountId(),
       }),
     };
   }
