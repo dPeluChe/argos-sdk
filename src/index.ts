@@ -5,6 +5,7 @@ import type { TraceHeaders } from './trace.js';
 
 export { ArgosClient } from './client.js';
 export { parseDsn, type Endpoint } from './dsn.js';
+export { type ConsentState } from './consent.js';
 export { SESSION_IDLE_MS } from './session.js';
 export { baggage, traceparent, newTrace, type TraceContext, type TraceHeaders } from './trace.js';
 export { isAllowedOrigin, type InstrumentFetchOptions } from './instrument.js';
@@ -29,10 +30,37 @@ export type {
 
 let current: ArgosClient | undefined;
 
-export function init(options: InitOptions): ArgosClient {
+/**
+ * Starts the client, and **never throws**. A DSN is typed by hand into an
+ * environment variable at deploy time, and this call runs first, at the top of
+ * an application's entry — so a typo in it must not be the thing that stops the
+ * product booting. Telemetry that can take down what it observes is worse than
+ * no telemetry.
+ *
+ * The failure is loud in the console and silent everywhere else: `undefined`
+ * comes back, every other entry point stays the no-op it already is before
+ * `init`, and nothing is sent. `parseDsn` and `resolveEndpoint` still throw for
+ * callers that want to validate a DSN rather than run on one.
+ */
+export function init(options: InitOptions): ArgosClient | undefined {
   current?.close();
-  current = new ArgosClient(options);
+  try {
+    current = new ArgosClient(options);
+  } catch (cause) {
+    current = undefined;
+    // The only channel an SDK has when it cannot start: it has no transport
+    // yet, and throwing is the thing this exists to stop doing.
+    console.error('argos: disabled, init failed —', cause);
+  }
   return current;
+}
+
+export function grantConsent(): void {
+  current?.grantConsent();
+}
+
+export function revokeConsent(): void {
+  current?.revokeConsent();
 }
 
 export function getClient(): ArgosClient | undefined {
@@ -42,6 +70,16 @@ export function getClient(): ArgosClient | undefined {
 // Every entry point is a no-op before init: analytics must never break the host app.
 export function track(name: string, props?: Props): void {
   current?.track(name, props);
+}
+
+/** The tenant this visit belongs to. Pass a stable identifier, never a display
+ *  name — see `ArgosClient.account`. */
+export function account(accountId: string): void {
+  current?.account(accountId);
+}
+
+export function signOut(): void {
+  current?.signOut();
 }
 
 export function identify(userId: string): void {

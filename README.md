@@ -32,6 +32,39 @@ The package name stays `@argos/browser`, so every import below is unchanged.
 Verified from a clean directory: npm clones, runs the build and resolves
 `dist/`.
 
+## Consent, and what is written before it
+
+`requireConsent` is off by default, so upgrading does not silently stop an
+install's data arriving. Turned on, nothing is stored on the device and nothing
+is sent until `grantConsent()` — the check sits in front of building an event,
+because building one is what creates and persists the anonymous id.
+
+Events from before a yes are **dropped, not buffered**: holding them until
+consent arrives is still having collected them before it did.
+
+A refusal is the one sticky direction. After `revokeConsent()`, an install that
+does not require consent does not read that silence as a fresh yes.
+
+## The tenant an event happened in
+
+`account(id)` marks which workspace, company or team a visit belongs to, and it
+sticks like the anonymous id — every later event carries it without being told
+again. `signOut()` forgets the person and the tenant and keeps the anonymous id,
+which is about the device.
+
+Pass a **stable identifier**: a row id, a UUID. Never a display name. It is
+stored exactly as given and never normalised, so `Acme`, `acme` and `acme ` are
+three different tenants for the rest of time.
+
+## What survives a closed tab
+
+Whatever could not be delivered is written to `localStorage` and sent by the
+next visit: at most 200 events, none older than seven days. That age is not a
+round number — it matches `MaxBackdate` in the ingest, which **clamps** an older
+timestamp instead of refusing it. Inside the window a resend is a no-op, because
+the stored row's key is the event's own id and time. Past it, the same event
+would land a second time carrying a moment that never happened.
+
 ## Quick start
 
 ```ts

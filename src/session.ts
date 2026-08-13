@@ -7,6 +7,7 @@ const ANON_ID = 'argos.anon_id';
 const SESSION_ID = 'argos.session_id';
 const SEEN_AT = 'argos.session_seen_at';
 const USER_ID = 'argos.user_id';
+const ACCOUNT_ID = 'argos.account_id';
 const ENTRY_SENT = 'argos.entry_sent';
 
 /**
@@ -61,5 +62,23 @@ export class Identity {
 
   setUserId(userId: string): void {
     this.local.set(USER_ID, userId);
+  }
+
+  accountId(): string | undefined {
+    return this.local.get(ACCOUNT_ID) ?? undefined;
+  }
+
+  setAccount(accountId: string): void {
+    this.local.set(ACCOUNT_ID, accountId);
+  }
+
+  /**
+   * Signing out forgets the person and the tenant, and keeps the anon id: that
+   * one is about this device, and clearing it would count the same browser as a
+   * new visitor every time somebody logs out.
+   */
+  clearUser(): void {
+    this.local.remove(USER_ID);
+    this.local.remove(ACCOUNT_ID);
   }
 }

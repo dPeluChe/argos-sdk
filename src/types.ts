@@ -10,11 +10,16 @@ export interface ArgosEvent {
   session_id: string;
   anon_id: string;
   user_id?: string;
+  /** The tenant this event happened in. Stamped from the sticky value set by
+   *  `account()`, absent when nothing set one. */
+  account_id?: string;
   trace_id: string;
   span_id: string;
   release?: string;
   environment?: string;
-  platform: 'browser';
+  /** Where the event was produced. The wire takes any string; these are the
+   *  two this SDK emits. */
+  platform: 'browser' | 'server';
   props?: Props;
 }
 
@@ -58,6 +63,14 @@ export interface InitOptions {
   autoPageviews?: boolean | AutoPageviewOptions;
   /** Emit one `web_vital` event per metric on page hide. Off by default. */
   webVitals?: boolean;
+  /**
+   * Store nothing and send nothing until `grantConsent()` is called.
+   *
+   * Off by default, so upgrading does not silently stop an install's data
+   * arriving. A refusal is sticky either way: once `revokeConsent()` has been
+   * called, this being off does not resume collection.
+   */
+  requireConsent?: boolean;
 }
 
 /**
