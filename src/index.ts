@@ -1,5 +1,6 @@
 import { ArgosClient } from './client.js';
 import { instrumentFetch as wrapFetch, type InstrumentFetchOptions } from './instrument.js';
+import { correlate, type CorrelatableEvent } from './sentry.js';
 import type { Correlation, InitOptions, Props } from './types.js';
 import type { TraceHeaders } from './trace.js';
 
@@ -10,7 +11,9 @@ export { SESSION_IDLE_MS } from './session.js';
 export { baggage, traceparent, newTrace, type TraceContext, type TraceHeaders } from './trace.js';
 export { isAllowedOrigin, type InstrumentFetchOptions } from './instrument.js';
 export { browserProps, campaignProps } from './context.js';
+export { correlate, type CorrelatableEvent } from './sentry.js';
 export { pageKey, PageviewTracker } from './pageviews.js';
+export { ClickTracker, eventFrom, EVENT_ATTRIBUTE } from './clicks.js';
 export {
   rate,
   VitalsCollector,
@@ -108,6 +111,17 @@ export function traceHeaders(): TraceHeaders | undefined {
 
 export function instrumentFetch(options?: InstrumentFetchOptions): () => void {
   return current ? wrapFetch(current, options) : () => undefined;
+}
+
+/**
+ * Drop-in for `Sentry.init({ beforeSend })`, so errors join the session the
+ * clicks are already in. A no-op before `init` and after `close`, and it
+ * returns the event either way — a `beforeSend` that returned nothing would
+ * discard the error, which is the one failure mode an error reporter must not
+ * have.
+ */
+export function argosBeforeSend<E extends CorrelatableEvent>(event: E): E & CorrelatableEvent {
+  return current === undefined ? event : correlate(event, current);
 }
 
 export function close(): void {
