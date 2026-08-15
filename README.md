@@ -13,7 +13,22 @@ app names — and carries the correlation spine that ties them to backend errors
 and agent runs: `session_id`, `anon_id`, `user_id`, `trace_id`.
 
 It does **not** capture errors. Point any existing Sentry SDK at Argos for
-that; it speaks the same protocol. This package adds what no standard covers.
+that; it speaks the same protocol. This package adds what no standard covers —
+including the one line that makes those errors land in the same session as the
+clicks around them:
+
+```js
+import * as Sentry from '@sentry/browser';
+import { argosBeforeSend, init } from '@argos/browser';
+
+init({ dsn, autoPageviews: true });
+Sentry.init({ dsn, beforeSend: argosBeforeSend });
+```
+
+Without `beforeSend`, both halves still work and both still store — the errors
+simply arrive with no session, and no screen can put them next to the visit
+that produced them. Correlation is the one thing that cannot be repaired
+afterwards, so this is the line to not skip.
 
 Zero runtime dependencies. UUIDv7, W3C Trace Context and W3C Baggage are
 implemented here rather than pulled in.

@@ -156,9 +156,13 @@ export class ArgosClient {
    * 30 minutes of inactivity, so a value captured once goes stale.
    */
   correlation(): Correlation {
+    const userId = this.identity.userId();
+    const accountId = this.identity.accountId();
     return {
       argos_session_id: this.identity.sessionId(),
       argos_anon_id: this.identity.anonId(),
+      ...(userId === undefined ? {} : { argos_user_id: userId }),
+      ...(accountId === undefined ? {} : { argos_account_id: accountId }),
     };
   }
 

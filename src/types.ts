@@ -80,4 +80,9 @@ export interface InitOptions {
 export interface Correlation {
   argos_session_id: string;
   argos_anon_id: string;
+  /** Absent until `identify` is called — a tag whose value is `undefined`
+   *  serialises as a null the ingest would have to reject, so it is omitted. */
+  argos_user_id?: string;
+  /** Absent until `account` is called. */
+  argos_account_id?: string;
 }
