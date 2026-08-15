@@ -13,6 +13,7 @@ export { isAllowedOrigin, type InstrumentFetchOptions } from './instrument.js';
 export { browserProps, campaignProps } from './context.js';
 export { correlate, type CorrelatableEvent } from './sentry.js';
 export { pageKey, PageviewTracker } from './pageviews.js';
+export { ClickTracker, eventFrom, EVENT_ATTRIBUTE } from './clicks.js';
 export {
   rate,
   VitalsCollector,

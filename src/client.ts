@@ -1,6 +1,7 @@
 import { browserProps, campaignProps } from './context.js';
 import { eventsUrl, identifyUrl, resolveEndpoint, type Endpoint } from './dsn.js';
 import { uuidv4 } from './ids.js';
+import { ClickTracker } from './clicks.js';
 import { PageviewTracker } from './pageviews.js';
 import { Consent, type ConsentState } from './consent.js';
 import { Outbox } from './outbox.js';
@@ -22,6 +23,7 @@ export class ArgosClient {
   private readonly release: string | undefined;
   private readonly detach: () => void;
   private readonly pageviews: PageviewTracker | undefined;
+  private readonly clicks: ClickTracker | undefined;
   private readonly vitals: VitalsCollector | undefined;
 
   constructor(options: InitOptions) {
@@ -54,6 +56,13 @@ export class ArgosClient {
         typeof options.autoPageviews === 'object' ? options.autoPageviews : {},
       );
       this.pageviews.start();
+    }
+
+    if (options.autoClicks === true) {
+      this.clicks = new ClickTracker((name, props) => {
+        this.track(name, props);
+      });
+      this.clicks.start();
     }
 
     if (options.webVitals === true) {
@@ -185,6 +194,7 @@ export class ArgosClient {
   close(): void {
     this.detach();
     this.pageviews?.stop();
+    this.clicks?.stop();
     this.vitals?.stop();
     this.transport.stop();
   }

@@ -64,6 +64,15 @@ export interface InitOptions {
   /** Emit one `web_vital` event per metric on page hide. Off by default. */
   webVitals?: boolean;
   /**
+   * Track clicks on elements carrying `data-argos-event`, with
+   * `data-argos-event-*` becoming props. Off by default, like the rest.
+   *
+   * Marked elements only — never every click. A tracker that reports all of
+   * them collects the text of whatever a person clicked, which is a privacy
+   * problem the install did not ask for.
+   */
+  autoClicks?: boolean;
+  /**
    * Store nothing and send nothing until `grantConsent()` is called.
    *
    * Off by default, so upgrading does not silently stop an install's data

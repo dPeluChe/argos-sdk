@@ -138,6 +138,7 @@ than use the module-level singleton.
 | `maxBufferSize`   | `1000`       | Past this the oldest events are dropped and counted          |
 | `autoPageviews`   | `false`      | `true` or `{ ignoreParams, hashMode }` — see below           |
 | `webVitals`       | `false`      | One `web_vital` event per metric, on page hide               |
+| `autoClicks`      | `false`      | Track elements marked `data-argos-event` — see below         |
 
 ### Automatic pageviews
 
@@ -191,6 +192,29 @@ And once per visit, on the first pageview, what no request header carries:
 Browser, OS and device type are not sent: ingest reads them from the
 User-Agent. Anything the browser does not expose is left out rather than sent
 as zero. Details and what was rejected: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+### Click tracking without writing JavaScript
+
+```ts
+init({ dsn, autoClicks: true });
+```
+
+```html
+<button data-argos-event="signup_clicked" data-argos-event-plan="pro">Sign up</button>
+```
+
+The name comes from `data-argos-event`, and every `data-argos-event-*`
+attribute becomes a prop. The nearest marked ancestor wins, so marking a button
+still reports when the click lands on an icon inside it.
+
+**Marked elements only** — never every click. A tracker that reports all of
+them collects the text of whatever a person clicked, which is a privacy problem
+the install did not ask for.
+
+One delegated listener, registered on the capture phase so a menu or modal that
+calls `stopPropagation` cannot silently delete the event. It is passive and
+never calls `preventDefault`: an analytics listener that can cancel a click can
+break a checkout button.
 
 ### Web vitals
 
