@@ -24,6 +24,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
+          # On by default: it turns itself on the day package.json gains a
+          # packageManager field. Off explicitly, since the runner does not outlive the job.
+          package-manager-cache: false
 
       - name: install
         run: npm ci
