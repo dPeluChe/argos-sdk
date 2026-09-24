@@ -31,8 +31,11 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  (await browser()).close();
+  // A heartbeat is sent a macrotask after init; one still pending when a test
+  // ends would land in the next test's fetch stub. Let it fire here.
   vi.useRealTimers();
+  await tick();
+  (await browser()).close();
   delete (globalThis as { __SENTRY__?: unknown }).__SENTRY__;
 });
 
@@ -183,7 +186,8 @@ describe('Sentry detection', () => {
     Sentry.init({ dsn: 'https://key@sentry.example.com/1', defaultIntegrations: false });
     await tick();
 
-    expect(beats()[0].body.sentry).toEqual({
+    // The last one: ours is scheduled after anything a previous test left pending.
+    expect(beats().at(-1)?.body.sentry).toEqual({
       name: 'sentry.javascript.browser',
       version: '11.0.0',
     });
