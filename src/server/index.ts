@@ -1,3 +1,4 @@
+import { logger, type Log } from '../debug.js';
 import { resolveEndpoint, eventsUrl, type Endpoint } from '../dsn.js';
 import { newSpanId, uuidv4 } from '../ids.js';
 import { deliver } from '../transport.js';
@@ -23,10 +24,13 @@ export class ArgosServer {
   private readonly endpoint: Endpoint;
   private readonly environment: string;
   private readonly release: string | undefined;
+  private readonly log: Log | undefined;
   private pending: ArgosEvent[] = [];
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
+    this.log = logger(options.debug);
+    this.log?.(`init ${this.endpoint.baseUrl} project ${this.endpoint.projectId}`);
     this.environment = options.environment ?? 'production';
     this.release = options.release;
   }
@@ -39,11 +43,17 @@ export class ArgosServer {
    */
   visit(headers: HeaderSource): Visit | undefined {
     const spine = spineFrom(headers);
+    this.log?.(
+      spine
+        ? `visit ${spine.sessionId} trace ${spine.traceId}`
+        : 'no visit: request lacks traceparent or argos baggage',
+    );
     return spine ? new Visit(this, spine) : undefined;
   }
 
   /** @internal — a Visit hands its finished events here. */
   accept(event: ArgosEvent): void {
+    this.log?.(`queue ${event.kind} ${event.name}`);
     this.pending.push(event);
   }
 
@@ -58,7 +68,14 @@ export class ArgosServer {
     if (batch.length === 0) return true;
     this.pending = [];
     const body = JSON.stringify({ sent_at: new Date().toISOString(), events: batch });
-    return deliver(eventsUrl(this.endpoint), this.endpoint.publicKey, body);
+    const delivered = await deliver(
+      eventsUrl(this.endpoint),
+      this.endpoint.publicKey,
+      body,
+      this.log,
+    );
+    this.log?.(`flush ${String(batch.length)}: ${delivered ? 'delivered' : 'failed'}`);
+    return delivered;
   }
 
   /** @internal */

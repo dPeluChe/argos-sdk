@@ -1,4 +1,5 @@
 import type { ArgosClient } from './client.js';
+import { mergeBaggage } from './trace.js';
 
 export interface InstrumentFetchOptions {
   /** Origins allowed to receive the headers. Defaults to same-origin only. */
@@ -40,9 +41,8 @@ export function instrumentFetch(
     const headers = client.traceHeaders();
     if (!request.headers.has('traceparent'))
       request.headers.set('traceparent', headers.traceparent);
-    if (headers.baggage && !request.headers.has('baggage')) {
-      request.headers.set('baggage', headers.baggage);
-    }
+    // Merged, not skipped: Sentry or OpenTelemetry often wrote baggage first.
+    request.headers.set('baggage', mergeBaggage(request.headers.get('baggage'), headers.baggage));
     return original(request);
   };
 

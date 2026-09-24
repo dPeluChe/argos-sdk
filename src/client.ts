@@ -4,6 +4,7 @@ import { uuidv4 } from './ids.js';
 import { ClickTracker } from './clicks.js';
 import { PageviewTracker } from './pageviews.js';
 import { Consent, type ConsentState } from './consent.js';
+import { logger, type Log } from './debug.js';
 import { Outbox } from './outbox.js';
 import { Identity } from './session.js';
 import { createStore } from './storage.js';
@@ -25,6 +26,7 @@ export class ArgosClient {
   private readonly pageviews: PageviewTracker | undefined;
   private readonly clicks: ClickTracker | undefined;
   private readonly vitals: VitalsCollector | undefined;
+  private readonly log: Log | undefined;
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
@@ -33,6 +35,7 @@ export class ArgosClient {
     this.identity = new Identity(local, createStore('sessionStorage'));
     this.environment = options.environment ?? 'production';
     this.release = options.release;
+    this.log = logger(options.debug);
     this.transport = new Transport({
       url: eventsUrl(this.endpoint),
       publicKey: this.endpoint.publicKey,
@@ -40,7 +43,12 @@ export class ArgosClient {
       maxBatchSize: options.maxBatchSize ?? 50,
       maxBufferSize: options.maxBufferSize ?? 1_000,
       outbox: new Outbox(local),
+      log: this.log,
     });
+    // Reading the session creates one: never before consent.
+    this.log?.(
+      `init ${this.endpoint.baseUrl} project ${this.endpoint.projectId}, consent ${this.consent.state()}, session ${this.consent.allowed() ? this.identity.sessionId() : 'none'}`,
+    );
     this.transport.start();
     // Vitals report into the same batch the unload flush is about to send.
     this.detach = onPageHidden(() => {
@@ -84,8 +92,10 @@ export class ArgosClient {
     // Checked here rather than in the transport: `buildEvent` reads the
     // identity, and reading it is what creates and stores an `anon_id`. The
     // gate has to sit in front of that, not in front of the send.
-    if (!this.consent.allowed()) return;
-    this.transport.enqueue(this.buildEvent(name, props));
+    if (!this.gate(`drop ${name}`)) return;
+    const event = this.buildEvent(name, props);
+    this.log?.(`queue ${event.kind} ${event.name}`);
+    this.transport.enqueue(event);
   }
 
   pageview(path?: string): void {
@@ -122,7 +132,7 @@ export class ArgosClient {
     // Behind the same gate as everything else: setting an account writes to
     // this browser, and writing before consent is the thing the gate exists
     // to stop.
-    if (!this.consent.allowed()) return;
+    if (!this.gate(`drop account ${accountId}`)) return;
     this.identity.setAccount(accountId);
   }
 
@@ -133,22 +143,44 @@ export class ArgosClient {
   }
 
   identify(userId: string): void {
-    if (!this.consent.allowed()) return;
+    if (!this.gate(`drop identify ${userId}`)) return;
+    // Apps identify on every page load; the alias only needs writing once per user.
+    if (this.identity.userId() === userId) {
+      this.log?.(`identify ${userId}: already set`);
+      return;
+    }
     this.identity.setUserId(userId);
+    this.log?.(`identify ${userId}`);
     const payload: IdentifyPayload = { anon_id: this.identity.anonId(), user_id: userId };
-    void deliver(identifyUrl(this.endpoint), this.endpoint.publicKey, JSON.stringify(payload));
+    void deliver(
+      identifyUrl(this.endpoint),
+      this.endpoint.publicKey,
+      JSON.stringify(payload),
+      this.log,
+    );
+  }
+
+  private gate(what: string): boolean {
+    const allowed = this.consent.allowed();
+    if (!allowed) {
+      const state = this.consent.state();
+      this.log?.(`${what}: consent ${state === 'unknown' ? 'pending' : state}`);
+    }
+    return allowed;
   }
 
   /** The visitor said yes. Events from here on are collected; the ones before
    *  it are gone on purpose. */
   grantConsent(): void {
     this.consent.grant();
+    this.log?.('consent granted');
   }
 
   /** The visitor said no, and it sticks across installs that do not require a
    *  gate — see `Consent.revoke`. */
   revokeConsent(): void {
     this.consent.revoke();
+    this.log?.('consent denied');
   }
 
   consentState(): ConsentState {

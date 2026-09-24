@@ -20,9 +20,10 @@ import { dirname, resolve } from 'node:path';
  * Raise these deliberately, in the commit that needs the room, with the reason
  * in the message. Never to make a build pass.
  */
+// 0.9: +2.5 KB raw / +300 B gzip for debug mode, baggage merging and async beforeSend.
 const BUDGETS = [
-  { entry: 'dist/index.js', maxRawBytes: 34_000, maxGzipBytes: 11_500 },
-  { entry: 'dist/index.cjs', maxRawBytes: 34_000, maxGzipBytes: 11_500 },
+  { entry: 'dist/index.js', maxRawBytes: 36_500, maxGzipBytes: 11_800 },
+  { entry: 'dist/index.cjs', maxRawBytes: 36_500, maxGzipBytes: 11_800 },
 ];
 
 const IMPORT = /from\s*['"](\.[^'"]+)['"]/g;

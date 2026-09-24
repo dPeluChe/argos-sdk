@@ -123,4 +123,37 @@ describe('instrumentFetch', () => {
     await fetch(SAME_ORIGIN);
     expect(headersOf(0).get('baggage')).toBe(headersOf(1).get('baggage'));
   });
+
+  it('merges into a baggage header another tracer already wrote', async () => {
+    undo = instrumentFetch(client);
+    const foreign = 'sentry-trace_id=abc,sentry-environment=prod';
+    await fetch(SAME_ORIGIN, { headers: { baggage: foreign } });
+    const merged = headersOf(0).get('baggage') ?? '';
+    expect(merged).toContain('sentry-trace_id=abc');
+    expect(merged).toContain('sentry-environment=prod');
+    expect(merged).toContain('argos.session_id=');
+    expect(merged).toContain('argos.anon_id=');
+  });
+
+  it('replaces stale argos entries instead of duplicating keys', async () => {
+    undo = instrumentFetch(client);
+    await fetch(SAME_ORIGIN, {
+      headers: { baggage: 'argos.session_id=stale,other=1,other=2,argos.user_id=gone' },
+    });
+    const keys = (headersOf(0).get('baggage') ?? '').split(',').map((m) => m.split('=')[0]);
+    expect(keys.filter((k) => k === 'argos.session_id')).toHaveLength(1);
+    expect(keys.filter((k) => k === 'other')).toHaveLength(1);
+    expect(keys).not.toContain('argos.user_id');
+    expect(headersOf(0).get('baggage')).not.toContain('stale');
+  });
+
+  it('stays within the W3C baggage limits, keeping its own entries', async () => {
+    undo = instrumentFetch(client);
+    const crowd = Array.from({ length: 80 }, (_, i) => `k${String(i)}=${'v'.repeat(150)}`);
+    await fetch(SAME_ORIGIN, { headers: { baggage: crowd.join(',') } });
+    const merged = headersOf(0).get('baggage') ?? '';
+    expect(merged.split(',').length).toBeLessThanOrEqual(64);
+    expect(merged.length).toBeLessThanOrEqual(8192);
+    expect(merged).toContain('argos.session_id=');
+  });
 });

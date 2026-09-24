@@ -105,6 +105,23 @@ describe('identify', () => {
     expect(events.find((e) => e.name === 'before')?.user_id).toBeUndefined();
     expect(events.find((e) => e.name === 'after')?.user_id).toBe('user_8871');
   });
+
+  it('sends the alias once for a user already set, and again for a new one', () => {
+    const aliases = (): number =>
+      fetchMock.mock.calls.filter((call) => (call[0] as string).includes('/identify/')).length;
+    const client = new ArgosClient({ dsn: DSN });
+    client.identify('user_8871');
+    client.close();
+
+    // The next page load restores the session and identifies again.
+    const reloaded = new ArgosClient({ dsn: DSN });
+    reloaded.identify('user_8871');
+    expect(aliases()).toBe(1);
+
+    reloaded.identify('user_9000');
+    expect(aliases()).toBe(2);
+    reloaded.close();
+  });
 });
 
 describe('pageview', () => {
