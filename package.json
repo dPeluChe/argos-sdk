@@ -26,7 +26,7 @@
   "scripts": {
     "lint": "eslint . --max-warnings 0 && prettier --check .",
     "format": "prettier --write .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.types.json",
     "test": "vitest run",
     "build": "tsup",
     "prepare": "npm run build",
@@ -35,6 +35,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@sentry/browser": "^11.0.0",
+    "@sentry/node": "^11.0.0",
     "@types/node": "^22.10.2",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",

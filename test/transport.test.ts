@@ -162,9 +162,26 @@ describe('the unload flush', () => {
     transport.flushOnUnload();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    const [url, blob] = sendBeacon.mock.calls[0] as [string, Blob];
+    const [url, body] = sendBeacon.mock.calls[0] as [string, unknown];
     expect(url).toBe(`${URL_}?argos_key=${'a'.repeat(32)}`);
-    expect(blob.type).toBe('application/json');
+    // A string beacon is text/plain, CORS-safelisted: no credentialed preflight
+    // for ingest's `Allow-Origin: *` to fail on another origin.
+    expect(typeof body).toBe('string');
+    expect((JSON.parse(body as string) as EventBatch).events).toHaveLength(1);
+  });
+
+  it('falls back to a keepalive fetch when sendBeacon throws', () => {
+    vi.stubGlobal('navigator', {
+      sendBeacon: vi.fn(() => {
+        throw new TypeError('blocked');
+      }),
+    });
+    const transport = new Transport(config());
+    transport.enqueue(event());
+    expect(() => {
+      transport.flushOnUnload();
+    }).not.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to a keepalive fetch when sendBeacon refuses the payload', () => {

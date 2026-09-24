@@ -120,7 +120,9 @@ export function instrumentFetch(options?: InstrumentFetchOptions): () => void {
  * discard the error, which is the one failure mode an error reporter must not
  * have.
  */
-export function argosBeforeSend<E extends CorrelatableEvent>(event: E): E & CorrelatableEvent {
+export function argosBeforeSend<E extends CorrelatableEvent & object>(
+  event: E,
+): E & CorrelatableEvent {
   return current === undefined ? event : correlate(event, current);
 }
 

@@ -144,6 +144,10 @@ export class Transport {
   /**
    * Unload path. `sendBeacon` survives the page dying but cannot set headers,
    * so the key rides in the query string instead.
+   *
+   * The body goes as a string, i.e. `text/plain`. A beacon always carries
+   * credentials, so a JSON-typed one to another origin needs a preflight that
+   * `Access-Control-Allow-Origin: *` fails, and the batch is silently dropped.
    */
   flushOnUnload(): void {
     const batch = this.buffer.splice(0, this.buffer.length);
@@ -151,8 +155,11 @@ export class Transport {
     const body = encode(batch);
     const url = `${this.config.url}?argos_key=${encodeURIComponent(this.config.publicKey)}`;
     const nav = globalThis.navigator as Partial<Navigator> | undefined;
-    const beacon = nav?.sendBeacon?.bind(nav);
-    if (beacon?.(url, new Blob([body], { type: JSON_TYPE }))) return;
+    try {
+      if (nav?.sendBeacon?.call(nav, url, body)) return;
+    } catch {
+      // Some browsers throw instead of returning false; the batch is already out of the buffer.
+    }
     // The page is going. This fetch cannot report back, so the batch is also
     // written down: a duplicate costs nothing and a loss cannot be undone.
     this.config.outbox?.save(batch);

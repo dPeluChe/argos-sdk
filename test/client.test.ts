@@ -168,6 +168,29 @@ describe('lifecycle flushes', () => {
     client.close();
   });
 
+  // A landing page left for /login by a full navigation before the 5 s timer.
+  it('beacons the landing pageview when the page is left before the first flush', () => {
+    vi.useFakeTimers();
+    const sendBeacon = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('navigator', { sendBeacon });
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: true });
+    vi.advanceTimersByTime(4_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    globalThis.dispatchEvent(new Event('pagehide'));
+
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    const body = sendBeacon.mock.calls[0]?.[1] as string;
+    expect((JSON.parse(body) as EventBatch).events[0]).toMatchObject({
+      name: 'pageview',
+      props: { path: '/' },
+    });
+    client.close();
+    vi.useRealTimers();
+  });
+
   it('detaches the listeners on close', () => {
     const sendBeacon = vi.fn().mockReturnValue(true);
     vi.stubGlobal('navigator', { sendBeacon });
@@ -262,7 +285,7 @@ describe('automatic capture', () => {
     expect(globalThis.history.pushState).toBe(originalPushState);
   });
 
-  it('batches the vitals into the unload flush', async () => {
+  it('batches the vitals into the unload flush', () => {
     const sendBeacon = vi.fn().mockReturnValue(true);
     vi.stubGlobal('navigator', { sendBeacon });
     const observers: ((entries: unknown[]) => void)[] = [];
@@ -288,8 +311,8 @@ describe('automatic capture', () => {
     client.close();
 
     expect(sendBeacon).toHaveBeenCalledTimes(1);
-    const [, blob] = sendBeacon.mock.calls[0] as [string, Blob];
-    const batch = JSON.parse(await blob.text()) as EventBatch;
+    const [, body] = sendBeacon.mock.calls[0] as [string, string];
+    const batch = JSON.parse(body) as EventBatch;
     expect(batch.events.map((event) => event.name)).toEqual(['web_vital', 'web_vital']);
     expect(batch.events.map((event) => event.props?.metric)).toEqual(['CLS', 'FCP']);
     expect(batch.events[1]).toMatchObject({
