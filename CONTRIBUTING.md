@@ -9,8 +9,7 @@ This file is only what is specific to the SDK.
 ## Before a commit
 
 ```bash
-npm run lint && npm run typecheck && npm run test
-node scripts/size-budget.mjs
+make check    # lint, typecheck, test, build, size budget; CI runs the same
 ```
 
 The size budget follows imports rather than measuring files, so adding an entry

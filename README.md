@@ -109,22 +109,48 @@ init({ projectId: '42', publicKey: 'a1b2c3d4e5f6', host: 'https://ingest.argos.d
 
 ## API
 
-| Function                    | What it does                                                              |
-| --------------------------- | ------------------------------------------------------------------------- |
-| `init(options)`             | Creates the client, starts the flush timer, returns it                    |
-| `track(name, props?)`       | Queues a product event                                                    |
-| `pageview(path?)`           | `track('pageview', …)` with attribution; defaults to `location.pathname`  |
-| `identify(userId)`          | Writes the `anon_id → user_id` alias and stamps `user_id` on later events |
-| `flush()`                   | Sends everything buffered; resolves when the queue drains                 |
-| `traceHeaders()`            | `{ traceparent, baggage }` for one outbound request                       |
-| `instrumentFetch(options?)` | Wraps `window.fetch` to attach those headers; returns the undo            |
-| `close()`                   | Detaches listeners and stops the timer                                    |
-| `getClient()`               | The active `ArgosClient`, or `undefined`                                  |
+| Function                             | What it does                                                              |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| `init(options)`                      | Creates the client, starts the flush timer, returns it                    |
+| `track(name, props?)`                | Queues a product event                                                    |
+| `pageview(path?)`                    | `track('pageview', …)` with attribution; defaults to `location.pathname`  |
+| `identify(userId)`                   | Writes the `anon_id → user_id` alias and stamps `user_id` on later events |
+| `account(accountId)`                 | Sets the tenant; sticky, stamped on every later event                     |
+| `signOut()`                          | Clears the user and the tenant                                            |
+| `grantConsent()` / `revokeConsent()` | See "Consent" above                                                       |
+| `argosBeforeSend`                    | Sentry `beforeSend` hook: stamps the visit onto an error                  |
+| `correlation()`                      | The current session, anon, user and account ids                           |
+| `flush()`                            | Sends everything buffered; resolves when the queue drains                 |
+| `traceHeaders()`                     | `{ traceparent, baggage }` for one outbound request                       |
+| `instrumentFetch(options?)`          | Wraps `window.fetch` to attach those headers; returns the undo            |
+| `close()`                            | Detaches listeners and stops the timer                                    |
+| `getClient()`                        | The active `ArgosClient`, or `undefined`                                  |
 
 Every call is a no-op before `init`. Analytics must never break the host app.
 
 `ArgosClient` is exported too, for apps that would rather hold the instance
 than use the module-level singleton.
+
+### Server half: `@argos/browser/server`
+
+For Node. It has no session of its own: it continues the visit the browser
+started, read off the `traceparent` and `baggage` that `instrumentFetch`
+attached.
+
+```ts
+import { initServer } from '@argos/browser/server';
+
+const argos = initServer({ dsn: process.env.ARGOS_DSN });
+
+app.post('/checkout', async (req, res) => {
+  argos.visit(req.headers)?.track('order_placed', { total: 42 });
+  await argos.flush(); // explicit: a server has no page-hide to flush on
+  res.end();
+});
+```
+
+`visit()` returns `undefined` for a request that did not come from an
+instrumented page (a cron, a webhook), so those never count as visits.
 
 ### init options
 
@@ -256,7 +282,7 @@ const undo = instrumentFetch({ origins: ['https://api.example.com', /\.example\.
 
 ```bash
 make install
-make check    # lint, typecheck, test, build
+make check    # lint, typecheck, test, build, size budget
 ```
 
 `make help` lists every target. Details in

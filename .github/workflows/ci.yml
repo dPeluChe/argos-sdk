@@ -43,6 +43,9 @@ jobs:
       - name: build
         run: npm run build
 
+      - name: size budget
+        run: npm run size
+
       # The flush timer must not keep a Node process alive. Fails by hanging.
       - name: node exits after init
         timeout-minutes: 1

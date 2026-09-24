@@ -1,4 +1,4 @@
-.PHONY: help install lint fmt typecheck test build check clean
+.PHONY: help install lint fmt typecheck test build size check clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -21,7 +21,10 @@ test: ## Vitest unit tests
 build: ## ESM + CJS + type declarations into dist/
 	npm run build
 
-check: lint typecheck test build ## Everything that must pass before a commit
+size: build ## Browser bundle against its byte budget
+	npm run size
+
+check: lint typecheck test size ## Everything that must pass before a commit
 
 clean:
 	rm -rf dist coverage

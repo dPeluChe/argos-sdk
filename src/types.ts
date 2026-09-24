@@ -1,7 +1,7 @@
 /** Event properties. Serialized to JSONB server-side, so anything JSON-safe goes. */
 export type Props = Record<string, unknown>;
 
-/** One product event, exactly as `docs/INGEST_API.md` defines it. */
+/** One product event, exactly as the workspace's `docs/INGEST_API.md` defines it. */
 export interface ArgosEvent {
   event_id: string;
   event_time: string;
