@@ -1,6 +1,7 @@
 import { logger, type Log } from '../debug.js';
 import { resolveEndpoint, eventsUrl, type Endpoint } from '../dsn.js';
 import { newSpanId, uuidv4 } from '../ids.js';
+import { sendHeartbeat } from '../heartbeat.js';
 import { deliver } from '../transport.js';
 import type { ArgosEvent, InitOptions, Props } from '../types.js';
 import { spineFrom, type HeaderSource, type Spine } from './spine.js';
@@ -33,6 +34,15 @@ export class ArgosServer {
     this.log?.(`init ${this.endpoint.baseUrl} project ${this.endpoint.projectId}`);
     this.environment = options.environment ?? 'production';
     this.release = options.release;
+    if (options.heartbeat !== false) {
+      sendHeartbeat(
+        'process',
+        this.endpoint,
+        { environment: this.environment, release: this.release ?? null, runtime: 'node' },
+        '@argos/browser/server',
+        this.log,
+      );
+    }
   }
 
   /**

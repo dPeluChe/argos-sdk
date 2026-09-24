@@ -82,6 +82,11 @@ export interface InitOptions {
   requireConsent?: boolean;
   /** Log what the SDK does to the console with an `[argos]` prefix. Off by default. */
   debug?: boolean;
+  /**
+   * One heartbeat at startup (per process on a server, per day in a browser),
+   * so `/check` can show the install is live. On by default; `false` opts out.
+   */
+  heartbeat?: boolean;
 }
 
 /**

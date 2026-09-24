@@ -21,9 +21,10 @@ import { dirname, resolve } from 'node:path';
  * in the message. Never to make a build pass.
  */
 // 0.9: +2.5 KB raw / +300 B gzip for debug mode, baggage merging and async beforeSend.
+// Startup heartbeat: +1.5 KB raw / +400 B gzip (daily gate, Sentry detection, payload).
 const BUDGETS = [
-  { entry: 'dist/index.js', maxRawBytes: 36_500, maxGzipBytes: 11_800 },
-  { entry: 'dist/index.cjs', maxRawBytes: 36_500, maxGzipBytes: 11_800 },
+  { entry: 'dist/index.js', maxRawBytes: 38_000, maxGzipBytes: 12_200 },
+  { entry: 'dist/index.cjs', maxRawBytes: 38_000, maxGzipBytes: 12_200 },
 ];
 
 const IMPORT = /from\s*['"](\.[^'"]+)['"]/g;
