@@ -118,10 +118,10 @@ The wrapper builds a `Request` so string, `URL` and `Request` inputs all take
 one code path, and it never overwrites a `traceparent` the caller already set —
 an app doing its own tracing owns that header.
 
-Baggage carries `argos.session_id` and `argos.anon_id` only, matching the
-example in `../../docs/INGEST_API.md` exactly. `user_id` is deliberately left
-out: the alias is resolved at query time through `identity_map`, so sending it
-on the wire would add a field the backend does not need.
+Baggage carries four keys: `argos.session_id`, `argos.anon_id`,
+`argos.user_id` and `argos.account_id`. The user and the tenant travel so a
+server continuing the visit (`@argos/browser/server`) stamps them without being
+told again. It is safe only because the default allowlist is same-origin.
 
 ### The page identity rule
 
