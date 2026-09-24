@@ -12,7 +12,7 @@ lint: ## ESLint with zero warnings, plus the Prettier check
 fmt: ## Format the code
 	npm run format
 
-typecheck: ## tsc --noEmit in strict mode
+typecheck: ## tsc strict, plus the Sentry 11 type test (exactOptionalPropertyTypes)
 	npm run typecheck
 
 test: ## Vitest unit tests

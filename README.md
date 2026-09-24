@@ -25,6 +25,10 @@ init({ dsn, autoPageviews: true });
 Sentry.init({ dsn, beforeSend: argosBeforeSend });
 ```
 
+Tested against Sentry **11** (`@sentry/browser` and `@sentry/node`): a type
+test in `test/types/` assigns `argosBeforeSend` to `beforeSend` under `strict`
+and `exactOptionalPropertyTypes`, and runs in `npm run typecheck`.
+
 Without `beforeSend`, both halves still work and both still store — the errors
 simply arrive with no session, and no screen can put them next to the visit
 that produced them. Correlation is the one thing that cannot be repaired
@@ -79,6 +83,16 @@ round number — it matches `MaxBackdate` in the ingest, which **clamps** an old
 timestamp instead of refusing it. Inside the window a resend is a no-op, because
 the stored row's key is the event's own id and time. Past it, the same event
 would land a second time carrying a moment that never happened.
+
+Nothing waits for the 5 s timer when the page goes. A landing page left for
+`/login` by a full navigation one second in still sends its pageview:
+`visibilitychange → hidden` or `pagehide` (whichever fires first) hands the
+whole buffer to `navigator.sendBeacon`. The beacon body is `text/plain` on
+purpose, so a cross-origin ingest needs no preflight. It can still be lost if
+the pageview was never recorded (consent pending, `autoPageviews` off and no
+`pageview()` call, `init` running after the click), or if the browser accepts
+the beacon and the network then drops it. When `sendBeacon` refuses or throws,
+the batch goes to the outbox and a keepalive `fetch`.
 
 ## Quick start
 
@@ -270,6 +284,9 @@ const undo = instrumentFetch({ origins: ['https://api.example.com', /\.example\.
 - **`session_id`** — UUIDv7 in `sessionStorage`, renewed after 30 minutes of
   inactivity. Any tracked event or outbound instrumented request counts as
   activity.
+- **`argos.entry_sent`** — internal `sessionStorage` key holding the session id
+  whose first pageview has been sent, so screen, viewport and language ride on
+  one pageview per session only. Not an API; do not read or write it.
 - **Storage blocked** (private mode, blocked cookies) degrades to in-memory
   instead of throwing. Ids then last as long as the page does.
 - **Flush triggers** — the timer, a full batch, `visibilitychange → hidden`,

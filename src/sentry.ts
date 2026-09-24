@@ -5,11 +5,13 @@ import type { ArgosClient } from './client.js';
  * package is imported. Keeping zero runtime dependencies is the reason; the
  * happy side effect is that this works against every Sentry SDK major, since
  * `tags` and `user.id` have not changed across any of them.
+ *
+ * No index signature: Sentry's `ErrorEvent` is an interface without one, and
+ * would not be assignable. `| undefined` keeps `exactOptionalPropertyTypes` hosts happy.
  */
 export interface CorrelatableEvent {
-  tags?: Record<string, unknown>;
-  user?: { id?: string | number; [key: string]: unknown };
-  [key: string]: unknown;
+  tags?: Record<string, unknown> | undefined;
+  user?: { id?: string | number | undefined } | undefined;
 }
 
 /**
@@ -23,8 +25,10 @@ export interface CorrelatableEvent {
  *
  * Values already on the event win. Only Argos writes these keys, so a caller
  * who set one did it deliberately.
+ *
+ * `& object` sidesteps the weak-type check, so an event with neither key still passes.
  */
-export function correlate<E extends CorrelatableEvent>(
+export function correlate<E extends CorrelatableEvent & object>(
   event: E,
   client: ArgosClient,
 ): E & CorrelatableEvent {
