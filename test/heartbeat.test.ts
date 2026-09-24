@@ -76,7 +76,7 @@ describe('server heartbeat', () => {
     await tick();
 
     expect(info).toHaveBeenCalledWith('[argos] heartbeat delivered');
-    expect(beats()[0].body.environment).toBe('staging');
+    expect(beats().at(-1)?.body.environment).toBe('staging');
   });
 
   it('never throws when the ingest cannot be reached', async () => {
@@ -106,7 +106,7 @@ describe('browser heartbeat', () => {
     (await browser()).init({ dsn: DSN });
     await tick();
     expect(beats()).toHaveLength(1);
-    expect(beats()[0].body).toEqual({
+    expect(beats().at(-1)?.body).toEqual({
       environment: 'production',
       release: null,
       runtime: 'browser',
@@ -200,6 +200,6 @@ describe('Sentry detection', () => {
     initServer({ dsn: DSN });
     await tick();
 
-    expect(beats()[0].body.sentry).toEqual({ name: 'sentry', version: '9.1.0' });
+    expect(beats().at(-1)?.body.sentry).toEqual({ name: 'sentry', version: '9.1.0' });
   });
 });
