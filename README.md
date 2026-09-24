@@ -75,6 +75,39 @@ consent arrives is still having collected them before it did.
 A refusal is the one sticky direction. After `revokeConsent()`, an install that
 does not require consent does not read that silence as a fresh yes.
 
+The startup heartbeat (below) follows the same gate: with `requireConsent` on,
+it waits for `grantConsent()`, and after a refusal it is never sent.
+
+## Startup heartbeat
+
+An install that only reports errors cannot prove it is live: no news is not
+evidence. So `init` and `initServer` each send one small heartbeat to
+`POST /api/{project}/heartbeat/`, and the workspace's `/check` lists what has
+checked in under `components`.
+
+```json
+{
+  "environment": "production",
+  "release": "web@1.4.0",
+  "runtime": "browser",
+  "sdk": { "name": "@argos/browser", "version": "0.8.5" },
+  "sentry": { "name": "sentry.javascript.browser", "version": "11.0.0" }
+}
+```
+
+That is the whole body: no ids, no URL, nothing about the visitor. `environment`
+and `release` are the ones events carry. `sentry` is a Sentry SDK found on the
+page or process (read off its global, never imported), or `null`.
+
+- **Browser:** at most once per browser per day (the date is kept in
+  `localStorage` under `argos.heartbeat`; without storage, once per page load),
+  and only once consent allows sending. `runtime` is `browser`.
+- **Server:** once per process, right after `initServer`. `runtime` is `node`,
+  `sdk.name` is `@argos/browser/server`.
+
+It is fire and forget: a failure never throws, and with `debug: true` it logs
+`heartbeat delivered` or `heartbeat failed`. `heartbeat: false` turns it off.
+
 ## The tenant an event happened in
 
 `account(id)` marks which workspace, company or team a visit belongs to, and it
@@ -197,7 +230,7 @@ export async function POST(request: Request) {
 ```
 
 `initServer` takes `debug: true` too, and then logs each request's visit (or
-why there was none) and each flush's result.
+why there was none), each flush's result and the startup heartbeat's.
 
 ### init options
 
@@ -214,6 +247,7 @@ why there was none) and each flush's result.
 | `autoClicks`      | `false`      | Track elements marked `data-argos-event` — see below         |
 | `requireConsent`  | `false`      | See "Consent" above                                          |
 | `debug`           | `false`      | Log what the SDK does to the console — see below             |
+| `heartbeat`       | `true`       | One startup heartbeat — see "Startup heartbeat"              |
 
 ### Debug mode
 

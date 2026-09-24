@@ -47,3 +47,7 @@ export function eventsUrl(endpoint: Endpoint): string {
 export function identifyUrl(endpoint: Endpoint): string {
   return `${endpoint.baseUrl}/api/${endpoint.projectId}/identify/`;
 }
+
+export function heartbeatUrl(endpoint: Endpoint): string {
+  return `${endpoint.baseUrl}/api/${endpoint.projectId}/heartbeat/`;
+}

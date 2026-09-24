@@ -36,3 +36,7 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
     value: new MemoryStorage(),
   });
 }
+
+// No test may reach the network: a heartbeat timer firing after a test's own
+// fetch stub was restored would otherwise resolve a real hostname.
+globalThis.fetch = () => Promise.reject(new TypeError('network disabled in tests'));

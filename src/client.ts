@@ -4,16 +4,18 @@ import { uuidv4 } from './ids.js';
 import { ClickTracker } from './clicks.js';
 import { PageviewTracker } from './pageviews.js';
 import { Consent, type ConsentState } from './consent.js';
+import { sendHeartbeat } from './heartbeat.js';
 import { logger, type Log } from './debug.js';
 import { Outbox } from './outbox.js';
 import { Identity } from './session.js';
-import { createStore } from './storage.js';
+import { createStore, type KeyValueStore } from './storage.js';
 import { baggage, newTrace, traceparent, type TraceHeaders } from './trace.js';
 import { deliver, Transport } from './transport.js';
 import { VitalsCollector } from './vitals.js';
 import type { Correlation, ArgosEvent, IdentifyPayload, InitOptions, Props } from './types.js';
 
 const MAX_NAME_LENGTH = 200;
+const HEARTBEAT_KEY = 'argos.heartbeat';
 
 export class ArgosClient {
   private readonly endpoint: Endpoint;
@@ -27,10 +29,13 @@ export class ArgosClient {
   private readonly clicks: ClickTracker | undefined;
   private readonly vitals: VitalsCollector | undefined;
   private readonly log: Log | undefined;
+  private readonly local: KeyValueStore;
+  private readonly heartbeat: boolean;
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
-    const local = createStore('localStorage');
+    const local = (this.local = createStore('localStorage'));
+    this.heartbeat = options.heartbeat !== false;
     this.consent = new Consent(local, options.requireConsent ?? false);
     this.identity = new Identity(local, createStore('sessionStorage'));
     this.environment = options.environment ?? 'production';
@@ -86,6 +91,23 @@ export class ArgosClient {
       });
       this.vitals.start();
     }
+    this.beat();
+  }
+
+  private beat(): void {
+    // Once a day per browser, and never before consent: the README promises
+    // nothing is sent until grantConsent().
+    if (!this.heartbeat || !this.consent.allowed()) return;
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.local.get(HEARTBEAT_KEY) === today) return;
+    this.local.set(HEARTBEAT_KEY, today);
+    sendHeartbeat(
+      today,
+      this.endpoint,
+      { environment: this.environment, release: this.release ?? null, runtime: 'browser' },
+      '@argos/browser',
+      this.log,
+    );
   }
 
   track(name: string, props?: Props): void {
@@ -174,6 +196,7 @@ export class ArgosClient {
   grantConsent(): void {
     this.consent.grant();
     this.log?.('consent granted');
+    this.beat();
   }
 
   /** The visitor said no, and it sticks across installs that do not require a
