@@ -119,11 +119,28 @@ export function instrumentFetch(options?: InstrumentFetchOptions): () => void {
  * returns the event either way — a `beforeSend` that returned nothing would
  * discard the error, which is the one failure mode an error reporter must not
  * have.
+ *
+ * Composes with an existing hook: `null` (dropped) stays `null`, and a promise
+ * is awaited and its event correlated.
  */
+export function argosBeforeSend(event: null): null;
+export function argosBeforeSend<E extends CorrelatableEvent & object>(
+  event: PromiseLike<E | null>,
+): PromiseLike<(E & CorrelatableEvent) | null>;
 export function argosBeforeSend<E extends CorrelatableEvent & object>(
   event: E,
-): E & CorrelatableEvent {
-  return current === undefined ? event : correlate(event, current);
+): E & CorrelatableEvent;
+export function argosBeforeSend<E extends CorrelatableEvent & object>(
+  event: E | PromiseLike<E | null> | null,
+): E | PromiseLike<E | null> | null;
+export function argosBeforeSend<E extends CorrelatableEvent & object>(
+  event: E | PromiseLike<E | null> | null,
+): E | PromiseLike<E | null> | null {
+  if (event === null) return null;
+  if ('then' in event && typeof event.then === 'function') {
+    return Promise.resolve(event).then((resolved) => argosBeforeSend(resolved));
+  }
+  return current === undefined ? event : correlate(event as E, current);
 }
 
 export function close(): void {

@@ -106,3 +106,26 @@ describe('a renewed session', () => {
     expect(argosBeforeSend({}).tags?.argos_session_id).not.toBe(first);
   });
 });
+
+describe('what a composed beforeSend can hand it', () => {
+  it('passes a dropped event through as null instead of throwing', () => {
+    init({ dsn: DSN });
+
+    expect(argosBeforeSend(null)).toBeNull();
+  });
+
+  it('awaits a promised event and correlates what it resolves to', async () => {
+    const client = init({ dsn: DSN });
+
+    const event = await argosBeforeSend(Promise.resolve({ message: 'boom' }));
+
+    expect(event?.tags?.argos_session_id).toBe(client?.correlation().argos_session_id);
+    expect(event?.message).toBe('boom');
+  });
+
+  it('keeps a promised drop a drop', async () => {
+    init({ dsn: DSN });
+
+    expect(await argosBeforeSend(Promise.resolve(null))).toBeNull();
+  });
+});

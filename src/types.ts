@@ -80,6 +80,8 @@ export interface InitOptions {
    * called, this being off does not resume collection.
    */
   requireConsent?: boolean;
+  /** Log what the SDK does to the console with an `[argos]` prefix. Off by default. */
+  debug?: boolean;
 }
 
 /**

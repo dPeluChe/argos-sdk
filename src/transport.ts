@@ -1,3 +1,4 @@
+import type { Log } from './debug.js';
 import type { Outbox } from './outbox.js';
 import type { ArgosEvent, EventBatch } from './types.js';
 
@@ -45,7 +46,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function post(url: string, publicKey: string, body: string): Promise<Attempt> {
+async function post(url: string, publicKey: string, body: string, log?: Log): Promise<Attempt> {
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -53,19 +54,31 @@ async function post(url: string, publicKey: string, body: string): Promise<Attem
       headers: { 'Content-Type': JSON_TYPE, 'X-Argos-Key': publicKey },
       body,
     });
+    if (log) {
+      const { status } = response;
+      const detail = status >= 400 && status < 500 ? await response.text().catch(() => '') : '';
+      log(`ingest ${String(status)} ${detail.slice(0, 300)}`.trim());
+    }
     return { status: response.status, retryAfter: response.headers.get('Retry-After') };
   } catch {
+    log?.('ingest unreachable');
     return { status: null, retryAfter: null };
   }
 }
 
 /** POST with backoff. Resolves `false` when the payload was given up on. */
-export async function deliver(url: string, publicKey: string, body: string): Promise<boolean> {
+export async function deliver(
+  url: string,
+  publicKey: string,
+  body: string,
+  log?: Log,
+): Promise<boolean> {
   for (let attempt = 0; ; attempt++) {
-    const result = await post(url, publicKey, body);
+    const result = await post(url, publicKey, body, log);
     if (result.status !== null && result.status < 400) return true;
     const plan = planRetry(result, attempt);
     if (!plan.retry) return false;
+    log?.(`retry ${String(attempt + 1)} in ${String(plan.delayMs)}ms`);
     await sleep(plan.delayMs);
   }
 }
@@ -79,6 +92,7 @@ export interface TransportConfig {
   /** Where a batch goes when the network refused it for good, and where the
    *  next visit looks first. Absent in tests that do not care. */
   outbox?: Outbox;
+  log?: Log | undefined;
 }
 
 export class Transport {
@@ -97,7 +111,10 @@ export class Transport {
       this.dropped += 1;
       overflowed = true;
     }
-    if (overflowed) event.props = { ...event.props, 'argos.dropped_events': this.dropped };
+    if (overflowed) {
+      this.config.log?.(`drop oldest: buffer full`);
+      event.props = { ...event.props, 'argos.dropped_events': this.dropped };
+    }
     this.buffer.push(event);
     if (this.buffer.length >= this.config.maxBatchSize) void this.flush();
   }
@@ -108,7 +125,10 @@ export class Transport {
     // oldest, and the acceptance window it has to reach is a fixed distance
     // from now, not from when it was queued.
     const waiting = this.config.outbox?.take() ?? [];
-    if (waiting.length > 0) this.buffer.unshift(...waiting);
+    if (waiting.length > 0) {
+      this.config.log?.(`outbox resend ${String(waiting.length)}`);
+      this.buffer.unshift(...waiting);
+    }
     const timer = setInterval(() => void this.flush(), this.config.flushIntervalMs);
     // A pending interval keeps a Node process alive; browsers return a number with no unref.
     (timer as { unref?: () => void }).unref?.();
@@ -129,14 +149,16 @@ export class Transport {
   private async drain(): Promise<void> {
     while (this.buffer.length > 0) {
       const batch = this.buffer.splice(0, this.config.maxBatchSize);
-      const delivered = await deliver(this.config.url, this.config.publicKey, encode(batch));
+      const { url, publicKey, log } = this.config;
+      log?.(`flush ${String(batch.length)} via fetch`);
+      const delivered = await deliver(url, publicKey, encode(batch), log);
       if (delivered) continue;
       // `deliver` has already retried everything worth retrying. Keeping the
       // rest of the buffer in memory and looping would spend the visitor's
       // battery on a network that is not there; it waits on disk for the next
       // visit instead. Resending later is free -- ingest deduplicates on the
       // event's own id and time.
-      this.config.outbox?.save([...batch, ...this.buffer.splice(0, this.buffer.length)]);
+      this.save([...batch, ...this.buffer.splice(0, this.buffer.length)]);
       return;
     }
   }
@@ -156,19 +178,28 @@ export class Transport {
     const url = `${this.config.url}?argos_key=${encodeURIComponent(this.config.publicKey)}`;
     const nav = globalThis.navigator as Partial<Navigator> | undefined;
     try {
-      if (nav?.sendBeacon?.call(nav, url, body)) return;
+      if (nav?.sendBeacon?.call(nav, url, body)) {
+        this.config.log?.(`flush ${String(batch.length)} via beacon`);
+        return;
+      }
     } catch {
       // Some browsers throw instead of returning false; the batch is already out of the buffer.
     }
     // The page is going. This fetch cannot report back, so the batch is also
     // written down: a duplicate costs nothing and a loss cannot be undone.
-    this.config.outbox?.save(batch);
+    this.config.log?.(`flush ${String(batch.length)} via keepalive`);
+    this.save(batch);
     void fetch(url, {
       method: 'POST',
       keepalive: true,
       headers: { 'Content-Type': JSON_TYPE, 'X-Argos-Key': this.config.publicKey },
       body,
     }).catch(() => undefined);
+  }
+
+  private save(events: ArgosEvent[]): void {
+    this.config.log?.(`outbox kept ${String(events.length)}`);
+    this.config.outbox?.save(events);
   }
 
   get pending(): number {

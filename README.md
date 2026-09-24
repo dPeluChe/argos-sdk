@@ -29,6 +29,17 @@ Tested against Sentry **11** (`@sentry/browser` and `@sentry/node`): a type
 test in `test/types/` assigns `argosBeforeSend` to `beforeSend` under `strict`
 and `exactOptionalPropertyTypes`, and runs in `npm run typecheck`.
 
+Already have a `beforeSend`? Wrap it. `argosBeforeSend` passes a dropped event
+(`null`) through as `null`, and awaits a promise before correlating it, so a
+sync or async hook composes the same way:
+
+```js
+Sentry.init({
+  dsn,
+  beforeSend: (event, hint) => argosBeforeSend(scrub(event, hint)),
+});
+```
+
 Without `beforeSend`, both halves still work and both still store — the errors
 simply arrive with no session, and no screen can put them next to the visit
 that produced them. Correlation is the one thing that cannot be repaired
@@ -166,6 +177,28 @@ app.post('/checkout', async (req, res) => {
 `visit()` returns `undefined` for a request that did not come from an
 instrumented page (a cron, a webhook), so those never count as visits.
 
+`visit()` also takes a web `Headers`, so fetch-style runtimes (Hono, Next.js
+route handlers, Cloudflare Workers) pass the request's headers as they are:
+
+```ts
+// Hono
+app.post('/checkout', async (c) => {
+  argos.visit(c.req.raw.headers)?.track('order_placed', { total: 42 });
+  await argos.flush();
+  return c.json({ ok: true });
+});
+
+// Next.js route handler, Workers: same thing with `request.headers`
+export async function POST(request: Request) {
+  argos.visit(request.headers)?.track('order_placed');
+  await argos.flush();
+  return Response.json({ ok: true });
+}
+```
+
+`initServer` takes `debug: true` too, and then logs each request's visit (or
+why there was none) and each flush's result.
+
 ### init options
 
 | Option            | Default      | Notes                                                        |
@@ -179,6 +212,29 @@ instrumented page (a cron, a webhook), so those never count as visits.
 | `autoPageviews`   | `false`      | `true` or `{ ignoreParams, hashMode }` — see below           |
 | `webVitals`       | `false`      | One `web_vital` event per metric, on page hide               |
 | `autoClicks`      | `false`      | Track elements marked `data-argos-event` — see below         |
+| `requireConsent`  | `false`      | See "Consent" above                                          |
+| `debug`           | `false`      | Log what the SDK does to the console — see below             |
+
+### Debug mode
+
+`init({ debug: true })` logs to `console.info`, every line prefixed `[argos]`,
+enough to check an integration without opening the dashboard:
+
+```
+[argos] init https://ingest.argos.dev project 42, consent unknown, session 0192f3a7-…
+[argos] queue product checkout_started
+[argos] drop signup_clicked: consent pending
+[argos] flush 2 via fetch
+[argos] ingest 401 {"error":"unknown public key"}
+[argos] retry 1 in 412ms
+[argos] flush 1 via beacon
+[argos] outbox kept 3
+```
+
+It covers init, every event queued or dropped (and why), every flush and the
+transport it used, the ingest status (with the error body on a 4xx), retries,
+and the outbox. Calls made before `init` cannot be logged: there is no client
+yet to know `debug` was asked for. With `debug` off, nothing is written.
 
 ### Automatic pageviews
 
@@ -278,6 +334,11 @@ party by accident.
 const undo = instrumentFetch({ origins: ['https://api.example.com', /\.example\.com$/] });
 ```
 
+Init order does not matter. When Sentry tracing or OpenTelemetry already
+wrote a `baggage` header, the `argos.*` entries are merged into it: foreign
+entries are kept, ours replaced, and no key appears twice. An existing
+`traceparent` is never overwritten.
+
 ## Behaviour worth knowing
 
 - **`anon_id`** — UUIDv4 in `localStorage`, stable across visits.
@@ -291,6 +352,8 @@ const undo = instrumentFetch({ origins: ['https://api.example.com', /\.example\.
   instead of throwing. Ids then last as long as the page does.
 - **Flush triggers** — the timer, a full batch, `visibilitychange → hidden`,
   and `pagehide`. The unload path uses `navigator.sendBeacon`.
+- **`identify` is idempotent** — calling it again with the id already set
+  sends nothing, so it is safe to call on every page load.
 - **Retries** — network errors and 5xx back off exponentially; 429 honours
   `Retry-After`. Every other 4xx is a permanent client bug and is never
   retried.

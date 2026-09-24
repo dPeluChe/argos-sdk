@@ -29,3 +29,24 @@ export function baggage(entries: Record<string, string | undefined>): string {
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
     .join(',');
 }
+
+/**
+ * Ours plus what another tracer already wrote: our keys replaced, a repeated
+ * foreign key kept once, and foreign members past the W3C limits (64, 8192
+ * bytes) dropped whole, since the argos ones are what a server needs.
+ */
+export function mergeBaggage(existing: string | null, ours: string): string {
+  const members = ours.split(',');
+  const seen = new Set(members.map(keyOf));
+  for (const raw of existing?.split(',') ?? []) {
+    const member = raw.trim();
+    const key = keyOf(member);
+    if (!key || key.startsWith('argos.') || seen.has(key)) continue;
+    if (members.length > 63 || `${members.join(',')},${member}`.length > 8192) break;
+    seen.add(key);
+    members.push(member);
+  }
+  return members.join(',');
+}
+
+const keyOf = (member: string): string => (member.split('=')[0] ?? '').trim();
