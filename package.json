@@ -1,7 +1,7 @@
 {
   "name": "@argos/browser",
-  "version": "0.8.0",
-  "description": "Argos browser SDK \u2014 product events, session correlation and W3C Trace Context propagation",
+  "version": "0.8.1",
+  "description": "Argos browser SDK — product events, session correlation and W3C Trace Context propagation",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
