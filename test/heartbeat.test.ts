@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MAX_ATTEMPTS } from '../src/transport.js';
 
 const DSN = 'https://0123456789abcdef0123456789abcdef@ingest.example.com/42';
 const URL = 'https://ingest.example.com/api/42/heartbeat/';
@@ -168,12 +169,15 @@ describe('browser heartbeat', () => {
   });
 
   it('never throws when fetch rejects', async () => {
+    // Fake timers so every backoff retry runs here: on real timers they post
+    // into whichever test's fetch stub is current 250ms+ later.
+    vi.useFakeTimers();
     fetchMock.mockRejectedValue(new TypeError('offline'));
     const { init } = await browser();
 
     expect(init({ dsn: DSN })).toBeDefined();
-    await tick();
-    expect(beats()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(beats()).toHaveLength(MAX_ATTEMPTS);
   });
 });
 
@@ -186,8 +190,8 @@ describe('Sentry detection', () => {
     Sentry.init({ dsn: 'https://key@sentry.example.com/1', defaultIntegrations: false });
     await tick();
 
-    // The last one: ours is scheduled after anything a previous test left pending.
-    expect(beats().at(-1)?.body.sentry).toEqual({
+    expect(beats()).toHaveLength(1);
+    expect(beats()[0].body.sentry).toEqual({
       name: 'sentry.javascript.browser',
       version: '11.0.0',
     });
@@ -200,6 +204,7 @@ describe('Sentry detection', () => {
     initServer({ dsn: DSN });
     await tick();
 
+    expect(beats()).toHaveLength(1);
     expect(beats()[0].body.sentry).toEqual({ name: 'sentry', version: '9.1.0' });
   });
 });
