@@ -41,7 +41,7 @@ export function campaignProps(search: string): Props {
   return props;
 }
 
-/** What only the browser knows: no request header carries screen or viewport. */
+/** What only the browser knows: no request header carries screen, viewport or time zone. */
 export function browserProps(): Props {
   const props: Props = {};
   const screen = globalThis.screen as Screen | undefined;
@@ -56,5 +56,12 @@ export function browserProps(): Props {
   }
   const language = (globalThis.navigator as Navigator | undefined)?.language;
   if (language) props.language = language.slice(0, MAX_VALUE_LENGTH);
+  // Guarded: a stripped-down Intl can throw, and the pageview matters more than the zone.
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (zone) props.timezone = zone.slice(0, MAX_VALUE_LENGTH);
+  } catch {
+    // no time zone, the entry still goes out
+  }
   return props;
 }
