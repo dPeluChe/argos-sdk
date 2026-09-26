@@ -373,6 +373,66 @@ wrote a `baggage` header, the `argos.*` entries are merged into it: foreign
 entries are kept, ours replaced, and no key appears twice. An existing
 `traceparent` is never overwritten.
 
+## Source maps
+
+A stack trace from minified code points at `main.a1b2.js:1:48213`. Upload the
+build's source maps and Argos resolves those frames back to your files, lines
+and function names.
+
+**When it applies:** JavaScript or TypeScript that is bundled or minified
+before it runs: React, Vite, Next.js, webpack builds in the browser, and Node
+services compiled from TypeScript or bundled. It does not apply to Python, Go
+or Rust: their stack traces already carry real file names and lines.
+
+**1. Emit maps in the build.** Use _hidden_ maps: the `.map` files are written,
+but the bundle carries no `sourceMappingURL` comment, so browsers never fetch
+them and your original source is not advertised to visitors.
+
+| Bundler | Setting                                                 |
+| ------- | ------------------------------------------------------- |
+| Vite    | `build: { sourcemap: 'hidden' }` in `vite.config.ts`    |
+| Next.js | `productionBrowserSourceMaps: true` in `next.config.js` |
+| webpack | `devtool: 'hidden-source-map'`                          |
+| tsc     | `"sourceMap": true` in `tsconfig.json` (Node services)  |
+
+The `.map` files still sit in the output directory. If you do not want them
+public, upload them and then delete them before the deploy step copies the
+directory to a CDN or static host (Next.js serves them when the flag is on).
+
+**2. Get an upload token** from the application's page in Argos, and keep it
+in CI as the secret `ARGOS_UPLOAD_TOKEN`.
+
+**3. Upload in CI, after the build and before the deploy:**
+
+```bash
+ARGOS_API_URL=https://argos.example.com \
+ARGOS_UPLOAD_TOKEN=${{ secrets.ARGOS_UPLOAD_TOKEN }} \
+npx argos-sourcemaps upload --release "web@$GIT_SHA" --dsn "$ARGOS_DSN" dist
+```
+
+```
+argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --dsn <dsn>]
+                        [--token <t>] [--include-sources] [--dry-run] <dir> [<dir>...]
+```
+
+- **`--release` must equal the `release` passed to `Sentry.init` / the Argos
+  SDK init**, character for character. Maps are stored per release; a
+  mismatch means frames stay minified. Build both from the same variable.
+- `--api` (or `ARGOS_API_URL`) is required; there is no default host.
+- The project comes from `--project`, or from `--dsn` / `ARGOS_DSN`.
+- Files are named by their path relative to each directory given, with
+  forward slashes: `dist/assets/app.js.map` passed as `dist` becomes
+  `assets/app.js.map`. `node_modules` is skipped.
+- `--include-sources` also uploads the `.js`/`.mjs`/`.cjs` file next to each
+  map, for maps built without `sourcesContent`.
+- `--dry-run` lists what would be sent and needs no token.
+- Uploads run four at a time, with one retry on a network error or 5xx.
+  A 401 (bad or revoked token) or 404 (wrong project) stops the run; files
+  over 20 MiB are skipped with a warning. The exit code is non-zero when any
+  upload failed, so the CI step fails. The token is never printed.
+- Needs Node 20 or newer, and has no dependencies. It ships in this package
+  but is a separate build: it adds nothing to the browser bundle.
+
 ## Behaviour worth knowing
 
 - **`anon_id`** — UUIDv4 in `localStorage`, stable across visits.
