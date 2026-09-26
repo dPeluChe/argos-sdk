@@ -318,9 +318,13 @@ And once per visit, on the first pageview, what no request header carries:
 | `screen_width`, `screen_height`     | `screen`                         |
 | `viewport_width`, `viewport_height` | `innerWidth` / `innerHeight`     |
 | `language`                          | `navigator.language`             |
+| `timezone`                          | `Intl` resolved time zone (IANA) |
 
 Browser, OS and device type are not sent: ingest reads them from the
-User-Agent. Anything the browser does not expose is left out rather than sent
+User-Agent. Country, region and city are not sent either: ingest looks them up
+from the request IP and stores them on the visit, never the IP itself.
+`timezone` is the fallback when that lookup is off or finds nothing. Anything
+the browser does not expose is left out rather than sent
 as zero. Details and what was rejected: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ### Click tracking without writing JavaScript
@@ -440,7 +444,7 @@ argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --ds
   inactivity. Any tracked event or outbound instrumented request counts as
   activity.
 - **`argos.entry_sent`** — internal `sessionStorage` key holding the session id
-  whose first pageview has been sent, so screen, viewport and language ride on
+  whose first pageview has been sent, so screen, viewport, language and time zone ride on
   one pageview per session only. Not an API; do not read or write it.
 - **Storage blocked** (private mode, blocked cookies) degrades to in-memory
   instead of throwing. Ids then last as long as the page does.

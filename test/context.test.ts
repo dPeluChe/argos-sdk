@@ -58,13 +58,14 @@ describe('campaignProps', () => {
 });
 
 describe('browserProps', () => {
-  it('reports the screen, the viewport and the language', () => {
+  it('reports the screen, the viewport, the language and the time zone', () => {
     expect(browserProps()).toEqual({
       screen_width: globalThis.screen.width,
       screen_height: globalThis.screen.height,
       viewport_width: globalThis.innerWidth,
       viewport_height: globalThis.innerHeight,
       language: globalThis.navigator.language,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
   });
 
@@ -73,7 +74,20 @@ describe('browserProps', () => {
     vi.stubGlobal('navigator', undefined);
     vi.stubGlobal('innerWidth', undefined);
     vi.stubGlobal('innerHeight', undefined);
+    vi.stubGlobal('Intl', undefined);
     expect(browserProps()).toEqual({});
+    vi.unstubAllGlobals();
+  });
+
+  it('still reports the rest when Intl throws', () => {
+    vi.stubGlobal('Intl', {
+      DateTimeFormat: () => {
+        throw new RangeError('no ICU');
+      },
+    });
+    const props = browserProps();
+    expect(props.timezone).toBeUndefined();
+    expect(props.language).toBe(globalThis.navigator.language);
     vi.unstubAllGlobals();
   });
 });
@@ -145,8 +159,10 @@ describe('attribution on the wire', () => {
     const [entry, second] = sentEvents();
     expect(entry.props).toMatchObject({ language: globalThis.navigator.language });
     expect(entry.props?.screen_width).toBe(globalThis.screen.width);
+    expect(entry.props?.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(second.props?.language).toBeUndefined();
     expect(second.props?.screen_width).toBeUndefined();
+    expect(second.props?.timezone).toBeUndefined();
 
     // A second page load of the same visit is not a second entry.
     const next = new ArgosClient({ dsn: DSN, autoPageviews: true });
@@ -154,6 +170,7 @@ describe('attribution on the wire', () => {
     await next.flush();
     next.close();
     expect(sentEvents().at(-1)?.props?.screen_width).toBeUndefined();
+    expect(sentEvents().at(-1)?.props?.timezone).toBeUndefined();
   });
 
   it('sends the entry referrer once, never on the SPA navigations after it', async () => {

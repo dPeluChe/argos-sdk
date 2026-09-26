@@ -198,10 +198,10 @@ Instagram link, paid or not; and Mailchimp already sends real `utm_*`.
 ### The entry context
 
 `referrer`, `screen_width`, `screen_height`, `viewport_width`,
-`viewport_height` and `language` go out **once per visit**, on the first
-pageview. `Identity.claimEntry()` holds the flag in `sessionStorage` keyed by
+`viewport_height`, `language` and `timezone` go out **once per visit**, on the
+first pageview. `Identity.claimEntry()` holds the flag in `sessionStorage` keyed by
 the session id, so it renews with the session and an MPA does not resend the
-same six fields on every page load.
+same seven fields on every page load.
 
 They are here because no request header carries them: ingest parses the
 User-Agent for `browser`, `os` and `device_type`, but a UA string has never
@@ -209,6 +209,11 @@ contained a screen size or a viewport. `language` duplicates `Accept-Language`
 in principle, and is sent anyway — it is five bytes once a visit, it is the
 single resolved locale rather than a weighted list, and it survives a CDN or
 proxy that normalizes the header away.
+
+`timezone` is `Intl.DateTimeFormat().resolvedOptions().timeZone`, inside a
+`try`: it is the location fallback when ingest has no IP database or the lookup
+misses (a private range, a new block), and the only location a visit behind a
+VPN still reports honestly. It costs about 60 bytes gzip in the bundle.
 
 Unlike the campaign tags, these are gated: a screen does not change mid-visit,
 so a second copy is pure cost.
@@ -219,8 +224,7 @@ every route change look like it arrived from the external source. Internal
 movement is already described by `previous_path`.
 
 Rejected, each of them cheap and none of them worth a field on every visit:
-timezone (the IP already places the visitor, and it is a fingerprinting
-surface), `devicePixelRatio`, `screen.colorDepth`, `navigator.connection`,
+`devicePixelRatio`, `screen.colorDepth`, `navigator.connection`,
 `hardwareConcurrency` and `deviceMemory` (fingerprinting entropy with no
 analytics screen behind it), and anything the server already derives from the
 User-Agent.
