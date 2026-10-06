@@ -1,0 +1,58 @@
+name: release-tarball
+
+# Apps install the SDK from this tarball: a github: dependency records git+ssh
+# in the lockfile, and npm ci then fails in Docker and CI without a key.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tarball:
+    runs-on: [self-hosted, sbk-small]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: tag matches package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match package.json version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: install
+        run: npm ci
+
+      - name: build
+        run: npm run build
+
+      - name: pack
+        run: npm pack
+
+      - name: upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          tarball="argos-browser-${VERSION}.tgz"
+          test -f "$tarball"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "Install: npm install https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${tarball}"
+          fi
+          gh release upload "$TAG" "$tarball" --clobber

@@ -50,17 +50,20 @@ implemented here rather than pulled in.
 
 ## Install
 
-Not published to a registry yet — `npm install @argos/browser` returns a 404.
-Install it from the repository, which builds on install through the `prepare`
-script:
+Not published to a registry yet: `npm install @argos/browser` returns a 404.
+Install the tarball attached to each GitHub release (a workflow builds and
+uploads it on every `v*` tag):
 
 ```bash
-npm install github:dPeluChe/argos-sdk
+npm install https://github.com/dPeluChe/argos-sdk/releases/download/v<VERSION>/argos-browser-<VERSION>.tgz
 ```
 
+The lockfile records a plain HTTPS URL, so `npm ci` works in Docker and CI
+with no git or SSH key. `npm install github:dPeluChe/argos-sdk` also works on
+a developer machine (npm clones and builds through `prepare`), but it records
+`git+ssh` in the lockfile and breaks `npm ci` wherever there is no key.
+
 The package name stays `@argos/browser`, so every import below is unchanged.
-Verified from a clean directory: npm clones, runs the build and resolves
-`dist/`.
 
 ## Consent, and what is written before it
 
