@@ -380,6 +380,476 @@ wrote a `baggage` header, the `argos.*` entries are merged into it: foreign
 entries are kept, ours replaced, and no key appears twice. An existing
 `traceparent` is never overwritten.
 
+## Recipes
+
+One per stack, each complete on its own: follow only the one the app runs on
+(one per half, for a front end and a server). Every snippet reads the DSN from
+configuration; the Argos app page has the value. The agent brief Argos copies
+for an app with no platform links to these headings, so they keep their names:
+`recipe-browser`, `recipe-nextjs`, `recipe-node`, `recipe-python`,
+`recipe-go`, `recipe-http`. The snippets are the ones the Argos UI renders,
+and a test in argos-frontend checks they match.
+
+<!-- prettier-ignore-start -->
+### Recipe: browser
+
+React, Vite or plain JavaScript. Set `VITE_ARGOS_DSN` (another bundler: its
+public-variable prefix); it is embedded at build time, so a Dockerfile needs
+`ARG VITE_ARGOS_DSN` passed to the build.
+
+```bash
+npm install https://github.com/dPeluChe/argos-sdk/releases/download/v<VERSION>/argos-browser-<VERSION>.tgz
+npm install @sentry/browser@^11
+```
+
+```typescript
+import { init, track, identify, account, instrumentFetch } from '@argos/browser'
+
+init({
+  dsn: import.meta.env.VITE_ARGOS_DSN,
+  environment: 'production',
+  autoPageviews: true,
+  // Elements marked data-argos-event report themselves — see below.
+  autoClicks: true,
+})
+
+// Same-origin requests carry traceparent and baggage, so backend
+// events land in this visit.
+instrumentFetch()
+
+track('checkout_started', { plan: 'pro' })
+identify('user_8871')
+
+// The tenant the visit belongs to. Sticky: every later event carries
+// it. Pass a stable id, never a display name — it is stored verbatim.
+account('acct_1f2e3d')
+```
+
+```html
+<button data-argos-event="signup_clicked" data-argos-event-plan="pro">
+  Sign up
+</button>
+```
+
+```javascript
+import * as Sentry from '@sentry/browser'
+import { argosBeforeSend } from '@argos/browser'
+
+Sentry.init({
+  dsn: import.meta.env.VITE_ARGOS_DSN,
+  // Stamps this visit onto the error. Read per event, so a session
+  // renewed after idle is the one the error is filed under.
+  beforeSend: argosBeforeSend,
+})
+```
+
+- `init` sends the startup heartbeat itself.
+- API on another origin: `instrumentFetch({ origins: ['https://api.example.com'] })`,
+  and that API's CORS must allow the `traceparent` and `baggage` headers.
+- A Content-Security-Policy needs the ingest origin in `connect-src`.
+- Bundled code: upload [source maps](#source-maps).
+
+### Recipe: nextjs
+
+App Router. Set `NEXT_PUBLIC_ARGOS_DSN` (browser) and `ARGOS_DSN` (server) to
+the same DSN; `NEXT_PUBLIC_*` is inlined by `next build`.
+
+```bash
+npm install @sentry/browser@^11 @sentry/node@^11 https://github.com/dPeluChe/argos-sdk/releases/download/v<VERSION>/argos-browser-<VERSION>.tgz
+```
+
+```typescript
+// instrumentation-client.ts — Next runs it once in the browser, before
+// hydration, so no layout component is needed.
+import * as Sentry from '@sentry/browser'
+import { init, argosBeforeSend } from '@argos/browser'
+
+init({ dsn: process.env.NEXT_PUBLIC_ARGOS_DSN, autoPageviews: true, autoClicks: true })
+Sentry.init({ dsn: process.env.NEXT_PUBLIC_ARGOS_DSN, beforeSend: argosBeforeSend })
+
+// instrumentation.ts — the server. Next has no app.use: every uncaught
+// server error reaches onRequestError with the request headers, and the
+// visit is read off the baggage the browser sent.
+import type { Instrumentation } from 'next'
+
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return
+  const Sentry = await import('@sentry/node')
+  Sentry.init({ dsn: process.env.ARGOS_DSN })
+}
+
+export const onRequestError: Instrumentation.onRequestError = async (err, request) => {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return
+  const Sentry = await import('@sentry/node')
+  const { spineFrom } = await import('@argos/browser/server')
+  const spine = spineFrom(request.headers)
+  Sentry.withScope((scope) => {
+    if (spine) {
+      scope.setTags({ argos_session_id: spine.sessionId, argos_anon_id: spine.anonId })
+    }
+    Sentry.captureException(err)
+  })
+}
+```
+
+- A route handler that answers its own 500 never reaches Sentry: call
+  `Sentry.captureException(error)` there.
+- Upload [source maps](#source-maps) from `.next`.
+
+### Recipe: node
+
+Set `ARGOS_DSN`. `initServer` sends the startup heartbeat, so a server that has
+not failed still shows as installed.
+
+```bash
+npm install @sentry/node@^11 https://github.com/dPeluChe/argos-sdk/releases/download/v<VERSION>/argos-browser-<VERSION>.tgz
+```
+
+```javascript
+import * as Sentry from '@sentry/node'
+import { initServer } from '@argos/browser/server'
+
+Sentry.init({ dsn: process.env.ARGOS_DSN })
+const argos = initServer({ dsn: process.env.ARGOS_DSN })
+
+// Per request, not at startup: the session belongs to the caller. The
+// isolation scope is per request under Sentry 8+, so tags cannot leak
+// between concurrent requests.
+app.use((req, res, next) => {
+  const visit = argos.visit(req.headers)
+  if (visit) {
+    Sentry.getIsolationScope().setTags({
+      argos_session_id: visit.spine.sessionId,
+      argos_anon_id: visit.spine.anonId,
+    })
+  }
+  next()
+})
+```
+
+- Scrub: leave `sendDefaultPii` off and attach no request bodies; they carry
+  passwords and tokens.
+- Fetch-style servers (Hono, Workers): `argos.visit(request.headers)`.
+- Compiled from TypeScript or bundled: upload [source maps](#source-maps).
+
+### Recipe: python
+
+Set `ARGOS_DSN`. There is no Argos SDK for Python: errors go through
+`sentry-sdk`, scrubbed, and `correlate(request)` runs in the framework's
+per-request hook (Flask `before_request`, Django or FastAPI middleware).
+
+```bash
+pip install sentry-sdk
+```
+
+```python
+import os
+import re
+import sentry_sdk
+
+SECRET = re.compile(r"authorization|cookie|token|password|secret|key", re.I)
+
+def scrub(event, hint):
+    request = event.get("request") or {}
+    request.pop("cookies", None)
+    request.pop("data", None)
+    headers = request.get("headers") or {}
+    for name in list(headers):
+        if SECRET.search(name):
+            headers[name] = "[Filtered]"
+    return event
+
+sentry_sdk.init(
+    dsn=os.environ["ARGOS_DSN"],
+    traces_sample_rate=0,
+    send_default_pii=False,
+    # Bodies and frame locals hold passwords and tokens as plain values
+    # that key-based scrubbing cannot see.
+    max_request_body_size="never",
+    include_local_variables=False,
+    before_send=scrub,
+)
+
+from urllib.parse import unquote
+
+# There is no Argos SDK for Python, so the spine is read off the W3C
+# baggage the browser already sends, and set per request. Values are
+# percent-encoded per the spec, so an account named "Acme Corp"
+# arrives as Acme%20Corp and has to be decoded or it becomes a
+# tenant that matches nothing.
+def correlate(request):
+    baggage = request.headers.get("baggage", "")
+    pairs = dict(
+        item.strip().split("=", 1)
+        for item in baggage.split(",")
+        if "=" in item
+    )
+    for key in ("session_id", "anon_id", "user_id", "account_id"):
+        value = unquote(pairs.get(f"argos.{key}", "")).strip()
+        if value:
+            sentry_sdk.set_tag(f"argos_{key}", value)
+```
+
+```python
+import json
+import os
+import threading
+import urllib.request
+from urllib.parse import urlsplit
+
+import sentry_sdk
+
+def argos_heartbeat(environment, release):
+    dsn = urlsplit(os.environ["ARGOS_DSN"])
+    prefix, _, project = dsn.path.rpartition("/")
+    host = dsn.netloc.rpartition("@")[2]
+    sdk = {"name": "sentry.python", "version": sentry_sdk.VERSION}
+    body = {"environment": environment, "release": release,
+            "runtime": "python", "sdk": sdk, "sentry": sdk}
+    request = urllib.request.Request(
+        f"{dsn.scheme}://{host}{prefix}/api/{project}/heartbeat/",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json",
+                 "X-Argos-Key": dsn.username},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(request, timeout=2).close()
+    except Exception:
+        pass  # A missed heartbeat only delays the Installed badge.
+
+# Once per process start, off the startup path.
+threading.Thread(
+    target=argos_heartbeat, args=("production", "my-service@1.2.3"), daemon=True
+).start()
+```
+
+- Scrub: keep `before_send=scrub`, `max_request_body_size="never"` and
+  `include_local_variables=False`. Bodies and frame locals hold passwords as
+  plain values that key-based scrubbing cannot see.
+- Heartbeat: once per process start, off the startup path.
+
+### Recipe: go
+
+Set `ARGOS_DSN`. Errors go through `sentry-go`: scrubbed, one hub per request
+tagged with the caller's visit, and `slog` error records forwarded at most once
+a minute per message.
+
+```bash
+go get github.com/getsentry/sentry-go
+```
+
+```go
+import (
+	"context"
+	"log"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/getsentry/sentry-go"
+)
+
+const release = "my-service@1.2.3"
+
+var secretHeader = regexp.MustCompile(`(?i)authorization|cookie|token|password|secret|key`)
+
+func main() {
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn:              os.Getenv("ARGOS_DSN"),
+		Environment:      "production",
+		Release:          release,
+		TracesSampleRate: 0,
+		BeforeSend: func(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
+			if req := event.Request; req != nil {
+				req.Cookies, req.Data = "", ""
+				for name := range req.Headers {
+					if secretHeader.MatchString(name) {
+						delete(req.Headers, name)
+					}
+				}
+			}
+			return event
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Runs when main returns; log.Fatal and os.Exit skip it.
+	defer sentry.Flush(2 * time.Second)
+
+	slog.SetDefault(slog.New(&sentryHandler{
+		Handler: slog.NewJSONHandler(os.Stdout, nil),
+		seen:    &dedupe{last: map[string]time.Time{}},
+	}))
+
+	mux := http.NewServeMux()
+	log.Println(http.ListenAndServe(":8080", argosMiddleware(mux)))
+}
+
+// One hub per request, tagged with the browser's visit, so tags never leak
+// between concurrent requests. Panics are reported on it.
+func argosMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub := sentry.CurrentHub().Clone()
+		hub.Scope().SetRequest(r)
+		for tag, value := range argosBaggage(r.Header.Get("baggage")) {
+			hub.Scope().SetTag(tag, value)
+		}
+		ctx := sentry.SetHubOnContext(r.Context(), hub)
+		defer func() {
+			if v := recover(); v != nil {
+				if v == http.ErrAbortHandler {
+					panic(v)
+				}
+				hub.RecoverWithContext(ctx, v)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// Values are percent-encoded per the W3C spec: "Acme Corp" arrives as
+// Acme%20Corp and must be decoded or it tags a tenant that matches nothing.
+func argosBaggage(header string) map[string]string {
+	tags := map[string]string{}
+	for _, member := range strings.Split(header, ",") {
+		name, value, _ := strings.Cut(strings.SplitN(member, ";", 2)[0], "=")
+		switch key := strings.TrimSpace(name); key {
+		case "argos.session_id", "argos.anon_id", "argos.user_id", "argos.account_id":
+			if decoded, err := url.PathUnescape(strings.TrimSpace(value)); err == nil && decoded != "" {
+				tags["argos_"+strings.TrimPrefix(key, "argos.")] = decoded
+			}
+		}
+	}
+	return tags
+}
+
+// Error records are reported too, each message at most once a minute, so
+// a failing loop does not turn into thousands of events.
+type sentryHandler struct {
+	slog.Handler
+	seen *dedupe
+}
+
+func (h *sentryHandler) Handle(ctx context.Context, rec slog.Record) error {
+	if rec.Level >= slog.LevelError && h.seen.first(rec.Message) {
+		hub := sentry.GetHubFromContext(ctx)
+		if hub == nil {
+			hub = sentry.CurrentHub()
+		}
+		hub.CaptureMessage(rec.Message)
+	}
+	return h.Handler.Handle(ctx, rec)
+}
+
+func (h *sentryHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &sentryHandler{Handler: h.Handler.WithAttrs(attrs), seen: h.seen}
+}
+
+func (h *sentryHandler) WithGroup(name string) slog.Handler {
+	return &sentryHandler{Handler: h.Handler.WithGroup(name), seen: h.seen}
+}
+
+type dedupe struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func (d *dedupe) first(msg string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if at, ok := d.last[msg]; ok && time.Since(at) < time.Minute {
+		return false
+	}
+	d.last[msg] = time.Now()
+	return true
+}
+```
+
+```go
+// Imports: bytes, encoding/json, net/http, net/url, os, path, strings, time, sentry-go.
+// Once per process start, after sentry.Init: go argosHeartbeat("production", release)
+func argosHeartbeat(environment, release string) {
+	dsn, err := url.Parse(os.Getenv("ARGOS_DSN"))
+	if err != nil || dsn.User == nil {
+		return
+	}
+	prefix, project := path.Split(dsn.Path)
+	endpoint := dsn.Scheme + "://" + dsn.Host + strings.TrimSuffix(prefix, "/") + "/api/" + project + "/heartbeat/"
+	sdk := map[string]string{"name": "sentry.go", "version": sentry.SDKVersion}
+	body, _ := json.Marshal(map[string]any{
+		"environment": environment, "release": release, "runtime": "go", "sdk": sdk, "sentry": sdk,
+	})
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Argos-Key", dsn.User.Username())
+	client := &http.Client{Timeout: 2 * time.Second}
+	if resp, err := client.Do(req); err == nil {
+		_ = resp.Body.Close()
+	}
+}
+```
+
+- Scrub: keep the `BeforeSend` that drops cookies, bodies and auth headers.
+- `log.Fatal` and `os.Exit` skip the deferred `sentry.Flush`.
+- Heartbeat: once per process start, after `sentry.Init`.
+
+### Recipe: http
+
+Any other language. Errors: if it has a Sentry SDK, point it at the DSN with
+traces off and bodies, cookies and auth headers scrubbed, and tag each error
+with `argos_session_id` and `argos_anon_id` read off the request's W3C
+`baggage` (`argos.session_id`, `argos.anon_id`, percent-decoded). The ingest
+URL and key below are the example DSN's
+(`https://a1b2c3d4e5f6@ingest.argos.dev/42`): the key is the DSN's user part.
+
+```shell
+# Once per process start, in the background: it must never block or fail
+# startup. sdk names what reports the errors; sentry is the Sentry SDK in
+# use, or null when there is none.
+curl -s -m 2 -X POST 'https://ingest.argos.dev/api/42/heartbeat/' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Argos-Key: a1b2c3d4e5f6' \
+  -d '{"environment":"production","release":"my-service@1.2.3","runtime":"ruby","sdk":{"name":"sentry.ruby","version":"5.22.0"},"sentry":{"name":"sentry.ruby","version":"5.22.0"}}' \
+  >/dev/null 2>&1 &
+```
+
+```shell
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Fresh ids per run. event_id is the dedup key: reuse one and the second
+# send answers accepted and stores nothing.
+EVENT_ID=$(uuidgen | tr A-Z a-z)
+SESSION_ID=$(uuidgen | tr A-Z a-z)
+curl -X POST 'https://ingest.argos.dev/api/42/events/' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Argos-Key: a1b2c3d4e5f6' \
+  --data-binary @- <<JSON
+{"sent_at": "$NOW", "events": [{
+  "event_id": "$EVENT_ID",
+  "event_time": "$NOW",
+  "kind": "product", "name": "checkout_started",
+  "session_id": "$SESSION_ID",
+  "anon_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+}]}
+JSON
+```
+
+- Heartbeat: once per process start, in the background; it must never block
+  startup.
+- `event_id` is the dedup key: a fresh one per event.
+<!-- prettier-ignore-end -->
+
 ## Source maps
 
 A stack trace from minified code points at `main.a1b2.js:1:48213`. Upload the
