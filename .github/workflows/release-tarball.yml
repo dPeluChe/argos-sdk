@@ -49,10 +49,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+        # The self-hosted runner has no gh CLI; the REST API needs only curl.
         run: |
           tarball="argos-browser-${VERSION}.tgz"
           test -f "$tarball"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --verify-tag --title "$TAG" --notes "Install: npm install https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${tarball}"
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+          id=$(curl -fsS "${auth[@]}" "$api/releases/tags/$TAG" | node -p 'JSON.parse(require("fs").readFileSync(0)).id' 2>/dev/null || true)
+          if [ -z "$id" ] || [ "$id" = undefined ]; then
+            notes="Install: npm install https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${tarball}"
+            id=$(curl -fsS "${auth[@]}" -X POST "$api/releases" \
+              -d "$(node -e 'console.log(JSON.stringify({tag_name:process.argv[1],name:process.argv[1],body:process.argv[2]}))' "$TAG" "$notes")" \
+              | node -p 'JSON.parse(require("fs").readFileSync(0)).id')
           fi
-          gh release upload "$TAG" "$tarball" --clobber
+          old=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | node -p 'const a=JSON.parse(require("fs").readFileSync(0)).find(x=>x.name===process.argv[1]); a?a.id:""' "$tarball")
+          if [ -n "$old" ]; then curl -fsS "${auth[@]}" -X DELETE "$api/releases/assets/$old"; fi
+          curl -fsS "${auth[@]}" -H "Content-Type: application/gzip" --data-binary "@$tarball" \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/$id/assets?name=$tarball" >/dev/null
