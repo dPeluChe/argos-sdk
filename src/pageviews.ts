@@ -83,9 +83,35 @@ function patchHistory(onNavigate: () => void): () => void {
   };
 }
 
+// Module state, not tracker state: init() re-runs under StrictMode and HMR. See docs/DEVELOPMENT.md.
+let lastKey: string | undefined;
+
+/** False when `key` is the page already reported; records it otherwise. */
+export function claimPage(key: string): boolean {
+  if (key === lastKey) return false;
+  lastKey = key;
+  return true;
+}
+
+export function lastPage(): string | undefined {
+  return lastKey;
+}
+
+/** Test seam: a new document. */
+export function forgetPages(): void {
+  lastKey = undefined;
+}
+
+function sameSite(referrer: string): boolean {
+  try {
+    return new URL(referrer).host === (globalThis.location as Location | undefined)?.host;
+  } catch {
+    return false;
+  }
+}
+
 /** Emits a pageview on load and on every SPA navigation that lands on a different page. */
 export class PageviewTracker {
-  private previous: string | undefined;
   private restore: (() => void) | undefined;
 
   constructor(
@@ -95,37 +121,77 @@ export class PageviewTracker {
 
   start(): void {
     if (this.restore) return;
-    this.restore = patchHistory(() => {
-      this.capture();
-    });
+    const undo = [
+      patchHistory(() => {
+        this.capture();
+      }),
+      this.listen('pageshow', (event) => {
+        // bfcache restore: no script re-runs, and its key is the last one sent.
+        if ((event as PageTransitionEvent).persisted) this.capture(true);
+      }),
+    ];
+    if (this.options.hashMode === true) {
+      undo.push(
+        this.listen('hashchange', () => {
+          this.capture();
+        }),
+      );
+    }
+    this.restore = () => {
+      for (const step of undo) step();
+    };
+
+    // Prerendered: a view only once shown.
+    const document = globalThis.document as (Document & { prerendering?: boolean }) | undefined;
+    if (document?.prerendering === true) {
+      const onShown = (): void => {
+        document.removeEventListener('prerenderingchange', onShown);
+        this.capture();
+      };
+      document.addEventListener('prerenderingchange', onShown);
+      undo.push(() => {
+        document.removeEventListener('prerenderingchange', onShown);
+      });
+      return;
+    }
     this.capture();
   }
 
   stop(): void {
     this.restore?.();
     this.restore = undefined;
-    this.previous = undefined;
   }
 
-  /** No-op when the page identity matches the previous one — a router may navigate to itself. */
-  capture(): void {
+  /** No-op when the page identity matches the last one reported — a router may navigate to itself. */
+  capture(force = false): void {
     const location = globalThis.location as Location | undefined;
     if (!location) return;
     const key = pageKey(location, this.options);
-    if (key === this.previous) return;
+    const previous = lastPage();
+    if (force) forgetPages();
+    if (!claimPage(key)) return;
 
     const document = globalThis.document as Document | undefined;
     const props: Props = { path: key };
     if (document?.title) props.title = document.title;
-    // `document.referrer` never changes on SPA navigation: repeating it would
-    // make every route change look like it arrived from the external source.
-    if (this.previous === undefined) {
-      if (document?.referrer) props.referrer = document.referrer;
-    } else {
-      props.previous_path = this.previous;
+    // `document.referrer` never changes on SPA navigation, and a same-site one
+    // is a new tab of this app, not a source.
+    if (previous === undefined) {
+      if (document?.referrer && !sameSite(document.referrer)) props.referrer = document.referrer;
+    } else if (previous !== key) {
+      props.previous_path = previous;
     }
-
-    this.previous = key;
     this.emit(props);
+  }
+
+  private listen(type: string, handler: (event: Event) => void): () => void {
+    try {
+      globalThis.addEventListener(type, handler);
+      return () => {
+        globalThis.removeEventListener(type, handler);
+      };
+    } catch {
+      return () => undefined;
+    }
   }
 }

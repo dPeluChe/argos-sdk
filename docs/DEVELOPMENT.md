@@ -63,15 +63,20 @@ observed millisecond instead of producing ids that sort before existing ones.
 This matters because `session_id` is a UUIDv7 and the unified session timeline
 sorts by it.
 
-### The 30-minute idle window
+### The session window: 30 minutes idle, 24 hours at most
 
-`sessionId()` renews when `now - seen_at >= 30 min`, and rewrites `seen_at` on
-every call. Reading the session id _is_ the activity signal, so a `track()` or
-an instrumented outbound request both keep the session alive. A corrupted or
-missing `seen_at` starts a fresh session — a session of unknown age is worse
-than a new one.
+`sessionId()` renews when `now - seen_at >= 30 min` or `now - started_at >=
+24 h`, and rewrites `seen_at` on every call. It is called for every event this
+SDK builds, so tracking is the activity signal. `peekSessionId()` applies the
+same expiry without touching `seen_at`: `correlation()` and `traceHeaders()` use
+it, because a header on a background poll or an error report is not a person
+being there, and before it a polling app kept one visit open forever. A
+corrupted or missing `seen_at` starts a fresh session: a session of unknown age
+is worse than a new one.
 
-The threshold is `>=`, not `>`: at exactly 30 minutes the session is over.
+The threshold is `>=`, not `>`: at exactly 30 minutes the session is over. The
+24-hour cap is PostHog's; GA4 and Amplitude have none, and Matomo also splits at
+midnight and on a new campaign, which we do not.
 
 ### Storage fallback
 
@@ -139,9 +144,20 @@ look like a navigation.
 The hash is out by default — `#section` is an anchor, not a page — and
 `hashMode: true` puts it back for hash-based routers.
 
-A capture whose key equals the previous one emits nothing. That is what makes a
-`replaceState` adding `?utm_source=…` after landing free, and it also absorbs
-the double `replaceState` several routers do on mount.
+A capture whose key equals the last one reported emits nothing. That is what
+makes a `replaceState` adding `?utm_source=…` after landing free, and it also
+absorbs the double `replaceState` several routers do on mount. The last key is
+module state, not tracker state, so `init()` running again under React
+StrictMode, HMR or a re-mount does not report the page it is already on, and a
+manual `pageview()` is deduplicated against the same key. A full load starts
+over, which is right: a reload is a view.
+
+Three lifecycle cases are handled explicitly: a back/forward cache restore
+(`pageshow` with `persisted`) is a new view, a prerendered page waits for
+`prerenderingchange` before it is one, and `hashMode` also listens to
+`hashchange` (the key absorbs the `popstate` most browsers fire alongside it).
+A same-site `document.referrer` is dropped from the first view: it is a new tab
+of the same app, not a source.
 
 `title` is read synchronously at navigation time. A router that sets the title
 in an effect after render will have the previous title on that event; deferring
@@ -151,6 +167,21 @@ guarantee in a worse way, so the trade is made in favour of the count.
 The originals are restored on `close()`. A patched `history` surviving a hot
 reload double-counts every navigation, and there is no way to detect it from
 inside.
+
+### Engaged time
+
+`EngagementTracker` (`src/engagement.ts`) times the current page while
+`visibilityState === 'visible'` and `document.hasFocus()`, so a background tab
+adds nothing (GA4, Plausible and Fathom measure it the same way; a
+wall-clock gap between pageviews does not, and gives the last page zero).
+It reports `page_engagement { pageview_id, path, engaged_ms, scroll_depth }` as
+a delta: before the next pageview, on `visibilitychange` to hidden and on
+`pagehide`, ahead of the unload flush. A delta under one second with no new
+scroll is not sent. The worker sums the deltas into `sessions.engaged_ms`.
+
+Each pageview carries a `pageview_id`, and its engagement reports carry the same
+id and the **session the view was in**, not the current one: a page read for 40
+minutes without another event would otherwise report its time into a new visit.
 
 ### Attribution is not page identity
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { Identity, SESSION_IDLE_MS } from '../src/session.js';
+import { Identity, SESSION_IDLE_MS, SESSION_MAX_MS } from '../src/session.js';
 import { createStore, memoryStore, type KeyValueStore } from '../src/storage.js';
 
 let clock = 1_760_000_000_000;
@@ -82,5 +82,27 @@ describe('user_id', () => {
     expect(identity.userId()).toBeUndefined();
     identity.setUserId('user_8871');
     expect(new Identity(local, session, now).userId()).toBe('user_8871');
+  });
+});
+
+describe('session lifetime', () => {
+  it('is not kept alive by reads that are not activity', () => {
+    const identity = new Identity(local, session, now);
+    const first = identity.sessionId();
+    for (let i = 0; i < 4; i++) {
+      clock += SESSION_IDLE_MS / 2;
+      expect(identity.peekSessionId()).toBeDefined();
+    }
+    expect(identity.sessionId()).not.toBe(first);
+  });
+
+  it('ends after the maximum length however active the tab stays', () => {
+    const identity = new Identity(local, session, now);
+    const first = identity.sessionId();
+    for (let elapsed = 0; elapsed < SESSION_MAX_MS; elapsed += SESSION_IDLE_MS / 2) {
+      clock += SESSION_IDLE_MS / 2;
+      if (elapsed + SESSION_IDLE_MS / 2 < SESSION_MAX_MS) expect(identity.sessionId()).toBe(first);
+    }
+    expect(identity.sessionId()).not.toBe(first);
   });
 });

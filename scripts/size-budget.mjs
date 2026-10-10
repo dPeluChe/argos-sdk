@@ -22,9 +22,11 @@ import { dirname, resolve } from 'node:path';
  */
 // 0.9: +2.5 KB raw / +300 B gzip for debug mode, baggage merging and async beforeSend.
 // Startup heartbeat: +1.5 KB raw / +400 B gzip (daily gate, Sentry detection, payload).
+// 0.8.13: +5.5 KB raw / +1.3 KB gzip for engaged time per page, pageview_id,
+// bfcache/prerender/hashchange handling and the 24-hour session cap.
 const BUDGETS = [
-  { entry: 'dist/index.js', maxRawBytes: 38_000, maxGzipBytes: 12_200 },
-  { entry: 'dist/index.cjs', maxRawBytes: 38_000, maxGzipBytes: 12_200 },
+  { entry: 'dist/index.js', maxRawBytes: 43_600, maxGzipBytes: 13_550 },
+  { entry: 'dist/index.cjs', maxRawBytes: 43_600, maxGzipBytes: 13_550 },
 ];
 
 const IMPORT = /from\s*['"](\.[^'"]+)['"]/g;

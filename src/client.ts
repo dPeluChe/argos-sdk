@@ -2,7 +2,8 @@ import { browserProps, campaignProps } from './context.js';
 import { eventsUrl, identifyUrl, resolveEndpoint, type Endpoint } from './dsn.js';
 import { uuidv4 } from './ids.js';
 import { ClickTracker } from './clicks.js';
-import { PageviewTracker } from './pageviews.js';
+import { EngagementTracker, type EngagementReport } from './engagement.js';
+import { claimPage, PageviewTracker } from './pageviews.js';
 import { Consent, type ConsentState } from './consent.js';
 import { sendHeartbeat } from './heartbeat.js';
 import { logger, type Log } from './debug.js';
@@ -26,6 +27,8 @@ export class ArgosClient {
   private readonly release: string | undefined;
   private readonly detach: () => void;
   private readonly pageviews: PageviewTracker | undefined;
+  private readonly engagement: EngagementTracker | undefined;
+  private page: { id: string; path: string; sessionId: string } | undefined;
   private readonly clicks: ClickTracker | undefined;
   private readonly vitals: VitalsCollector | undefined;
   private readonly log: Log | undefined;
@@ -57,14 +60,21 @@ export class ArgosClient {
     this.transport.start();
     // Vitals report into the same batch the unload flush is about to send.
     this.detach = onPageHidden(() => {
+      this.engagement?.flush();
       this.vitals?.finalize();
       this.transport.flushOnUnload();
     });
 
+    if (options.engagement !== false) {
+      this.engagement = new EngagementTracker((report) => {
+        this.reportEngagement(report);
+      });
+    }
+
     if (options.autoPageviews) {
       this.pageviews = new PageviewTracker(
         (props) => {
-          this.track('pageview', this.pageviewProps(props));
+          this.emitPageview(props);
         },
         typeof options.autoPageviews === 'object' ? options.autoPageviews : {},
       );
@@ -110,22 +120,48 @@ export class ArgosClient {
     );
   }
 
-  track(name: string, props?: Props): void {
+  track(name: string, props?: Props, sessionId?: string): void {
     // Checked here rather than in the transport: `buildEvent` reads the
     // identity, and reading it is what creates and stores an `anon_id`. The
     // gate has to sit in front of that, not in front of the send.
     if (!this.gate(`drop ${name}`)) return;
-    const event = this.buildEvent(name, props);
+    const event = this.buildEvent(name, props, sessionId);
     this.log?.(`queue ${event.kind} ${event.name}`);
     this.transport.enqueue(event);
   }
 
+  /** Deduplicated against the last page reported, auto or manual. */
   pageview(path?: string): void {
     const loc = globalThis.location as Location | undefined;
     const props: Props = { path: path ?? loc?.pathname ?? '/' };
+    if (!claimPage(props.path as string)) return;
     const referrer = (globalThis.document as Document | undefined)?.referrer;
     if (referrer) props.referrer = referrer;
-    this.track('pageview', this.pageviewProps(props));
+    this.emitPageview(props);
+  }
+
+  /** The previous page's engagement goes first, then the view with a new id. */
+  private emitPageview(props: Props): void {
+    if (!this.gate('drop pageview')) return;
+    this.engagement?.flush();
+    const id = uuidv4();
+    const sessionId = this.identity.sessionId();
+    this.track('pageview', { ...this.pageviewProps(props), pageview_id: id }, sessionId);
+    if (this.engagement) {
+      this.page = { id, path: props.path as string, sessionId };
+      this.engagement.start();
+      this.engagement.begin();
+    }
+  }
+
+  /** Filed under the visit the page was viewed in, which may have gone idle since. */
+  private reportEngagement(report: EngagementReport): void {
+    if (!this.page) return;
+    this.track(
+      'page_engagement',
+      { pageview_id: this.page.id, path: this.page.path, ...report },
+      this.page.sessionId,
+    );
   }
 
   /**
@@ -223,7 +259,7 @@ export class ArgosClient {
     const userId = this.identity.userId();
     const accountId = this.identity.accountId();
     return {
-      argos_session_id: this.identity.sessionId(),
+      argos_session_id: this.identity.peekSessionId(),
       argos_anon_id: this.identity.anonId(),
       ...(userId === undefined ? {} : { argos_user_id: userId }),
       ...(accountId === undefined ? {} : { argos_account_id: accountId }),
@@ -238,7 +274,7 @@ export class ArgosClient {
       // visit stamps them without being told again. Same-origin only, which
       // `instrumentFetch` enforces before these are ever attached.
       baggage: baggage({
-        'argos.session_id': this.identity.sessionId(),
+        'argos.session_id': this.identity.peekSessionId(),
         'argos.anon_id': this.identity.anonId(),
         'argos.user_id': this.identity.userId(),
         'argos.account_id': this.identity.accountId(),
@@ -247,6 +283,8 @@ export class ArgosClient {
   }
 
   close(): void {
+    this.engagement?.flush();
+    this.engagement?.stop();
     this.detach();
     this.pageviews?.stop();
     this.clicks?.stop();
@@ -254,14 +292,14 @@ export class ArgosClient {
     this.transport.stop();
   }
 
-  private buildEvent(name: string, props?: Props): ArgosEvent {
+  private buildEvent(name: string, props?: Props, sessionId?: string): ArgosEvent {
     const trace = newTrace();
     const event: ArgosEvent = {
       event_id: uuidv4(),
       event_time: new Date().toISOString(),
       kind: 'product',
       name: name.slice(0, MAX_NAME_LENGTH),
-      session_id: this.identity.sessionId(),
+      session_id: sessionId ?? this.identity.sessionId(),
       anon_id: this.identity.anonId(),
       trace_id: trace.traceId,
       span_id: trace.spanId,

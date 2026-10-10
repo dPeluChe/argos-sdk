@@ -295,6 +295,51 @@ describe('automatic capture', () => {
     expect(sentEvents()[1].props).toMatchObject({ path: '/#/orders' });
   });
 
+  it("reports each page's engaged time against its pageview, before the next view", async () => {
+    let clock = 0;
+    const timer = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: true });
+    clock = 5_000;
+    globalThis.history.pushState({}, '', '/pricing');
+    await client.flush();
+    client.close();
+    timer.mockRestore();
+    focus.mockRestore();
+
+    const events = sentEvents();
+    expect(events.map((event) => event.name)).toEqual(['pageview', 'page_engagement', 'pageview']);
+    expect(events[1].props).toMatchObject({
+      pageview_id: events[0].props?.pageview_id,
+      path: '/',
+      engaged_ms: 5_000,
+    });
+    expect(events[1].session_id).toBe(events[0].session_id);
+    expect(events[2].props?.pageview_id).not.toBe(events[0].props?.pageview_id);
+  });
+
+  it('sends no engagement when told not to', async () => {
+    let clock = 0;
+    const timer = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: true, engagement: false });
+    clock = 5_000;
+    globalThis.history.pushState({}, '', '/pricing');
+    await client.flush();
+    client.close();
+    timer.mockRestore();
+    expect(sentEvents().map((event) => event.name)).toEqual(['pageview', 'pageview']);
+  });
+
+  it('counts a manual pageview once however often a component calls it', async () => {
+    const client = new ArgosClient({ dsn: DSN });
+    client.pageview('/docs');
+    client.pageview('/docs');
+    client.pageview('/docs/install');
+    await client.flush();
+    client.close();
+    expect(sentEvents().map((event) => event.props?.path)).toEqual(['/docs', '/docs/install']);
+  });
+
   it('unpatches history on close', () => {
     const client = new ArgosClient({ dsn: DSN, autoPageviews: true });
     expect(globalThis.history.pushState).not.toBe(originalPushState);
