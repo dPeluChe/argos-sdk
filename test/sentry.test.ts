@@ -100,7 +100,7 @@ describe('a renewed session', () => {
     const first = argosBeforeSend({}).tags?.argos_session_id;
 
     close();
-    sessionStorage.clear();
+    localStorage.removeItem('argos.session_id');
     init({ dsn: DSN });
 
     expect(argosBeforeSend({}).tags?.argos_session_id).not.toBe(first);

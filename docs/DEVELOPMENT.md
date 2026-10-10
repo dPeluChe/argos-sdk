@@ -65,6 +65,11 @@ sorts by it.
 
 ### The session window: 30 minutes idle, 24 hours at most
 
+The visit lives in `localStorage`, shared by every tab, as GA4 and PostHog do:
+a second tab of the same app is the same person in the same sitting. Until
+0.8.14 it lived in `sessionStorage`, so each tab was its own visit and a tab
+opened from the app showed up as a new session.
+
 `sessionId()` renews when `now - seen_at >= 30 min` or `now - started_at >=
 24 h`, and rewrites `seen_at` on every call. It is called for every event this
 SDK builds, so tracking is the activity signal. `peekSessionId()` applies the
@@ -159,10 +164,11 @@ Three lifecycle cases are handled explicitly: a back/forward cache restore
 A same-site `document.referrer` is dropped from the first view: it is a new tab
 of the same app, not a source.
 
-`title` is read synchronously at navigation time. A router that sets the title
-in an effect after render will have the previous title on that event; deferring
-the capture to fix it would break the "exactly one pageview per navigation"
-guarantee in a worse way, so the trade is made in favour of the count.
+The pageview is emitted synchronously, so the count and the dedupe never
+wait, and its `title` is re-read one microtask later on the event still sitting
+in the buffer: a router that sets the title right after `pushState` lands
+(PostHog waits the same microtask). One that sets it in an effect after render
+can still be late; deferring the emit further would trade the count for it.
 
 The originals are restored on `close()`. A patched `history` surviving a hot
 reload double-counts every navigation, and there is no way to detect it from
@@ -179,9 +185,15 @@ a delta: before the next pageview, on `visibilitychange` to hidden and on
 `pagehide`, ahead of the unload flush. A delta under one second with no new
 scroll is not sent. The worker sums the deltas into `sessions.engaged_ms`.
 
+While the page is active a 15-second check reports every full minute of
+engaged time, without waiting for the page to change. That bounds what a
+browser killed without `pagehide` loses, and each report renews the visit's
+idle window, so someone reading for 40 minutes is still in the same session when
+they click on.
+
 Each pageview carries a `pageview_id`, and its engagement reports carry the same
-id and the **session the view was in**, not the current one: a page read for 40
-minutes without another event would otherwise report its time into a new visit.
+id and the **session the view was in**, not the current one: a report arriving
+after that visit expired must not land in a new one.
 
 ### Attribution is not page identity
 
@@ -230,7 +242,7 @@ Instagram link, paid or not; and Mailchimp already sends real `utm_*`.
 
 `referrer`, `screen_width`, `screen_height`, `viewport_width`,
 `viewport_height`, `language` and `timezone` go out **once per visit**, on the
-first pageview. `Identity.claimEntry()` holds the flag in `sessionStorage` keyed by
+first pageview. `Identity.claimEntry()` holds the flag in the visit store keyed by
 the session id, so it renews with the session and an MPA does not resend the
 same seven fields on every page load.
 

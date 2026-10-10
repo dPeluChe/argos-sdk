@@ -92,6 +92,29 @@ describe('EngagementTracker', () => {
     tracker.stop();
   });
 
+  it('reports every minute of reading without waiting for the page to change', () => {
+    vi.useFakeTimers();
+    const { tracker, reports } = newTracker();
+    for (let elapsed = 15_000; elapsed <= 150_000; elapsed += 15_000) {
+      clock = elapsed;
+      vi.advanceTimersByTime(15_000);
+    }
+    expect(reports.map((r) => r.engaged_ms)).toEqual([60_000, 60_000]);
+    tracker.stop();
+    vi.useRealTimers();
+  });
+
+  it('sends no beat for a page left in the background', () => {
+    vi.useFakeTimers();
+    const { tracker, reports } = newTracker();
+    setVisibility('hidden');
+    clock = 300_000;
+    vi.advanceTimersByTime(300_000);
+    expect(reports).toHaveLength(0);
+    tracker.stop();
+    vi.useRealTimers();
+  });
+
   it('records the deepest scroll seen and reports when it grows', () => {
     vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(2_000);
     vi.stubGlobal('innerHeight', 500);

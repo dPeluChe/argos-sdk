@@ -208,3 +208,66 @@ describe('Sentry detection', () => {
     expect(beats()[0].body.sentry).toEqual({ name: 'sentry', version: '9.1.0' });
   });
 });
+
+describe('update notice', () => {
+  const answering = (latest: string): void => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ accepted: 1, latest_sdk: latest }), { status: 202 }),
+    );
+  };
+
+  it('warns the developer once when a newer SDK exists', async () => {
+    answering('99.0.0');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { initServer } = await server();
+    initServer({ dsn: DSN });
+    await tick();
+    await tick();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(`${version} is installed and 99.0.0 is available`);
+    expect(warn.mock.calls[0]?.[0]).toContain('releases/download/v99.0.0/argos-browser-99.0.0.tgz');
+    warn.mockRestore();
+  });
+
+  it('says nothing when the install is current', async () => {
+    answering(version);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { initServer } = await server();
+    initServer({ dsn: DSN });
+    await tick();
+    await tick();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('updateNotice', async () => {
+  const { compareVersions, updateNotice } = await import('../src/heartbeat.js');
+  const visitor = { debug: false, environment: 'production', runtime: 'browser' as const };
+
+  it('compares dotted versions numerically', () => {
+    expect(compareVersions('0.8.9', '0.8.13')).toBe(-1);
+    expect(compareVersions('0.9.0', '0.8.13')).toBe(1);
+    expect(compareVersions('0.8.13', '0.8.13')).toBe(0);
+    expect(compareVersions('1.0.0-rc.1', '1.0.0')).toBe(0);
+  });
+
+  it('keeps a production page in a visitor browser quiet unless debug is on', () => {
+    vi.stubGlobal('location', { hostname: 'app.example.com' });
+    const answer = { latest_sdk: '9.0.0' };
+    expect(updateNotice('0.8.13', answer, visitor)).toBeNull();
+    expect(updateNotice('0.8.13', answer, { ...visitor, debug: true })).toContain('9.0.0');
+    expect(updateNotice('0.8.13', answer, { ...visitor, environment: 'staging' })).toContain(
+      '9.0.0',
+    );
+    vi.stubGlobal('location', { hostname: 'localhost' });
+    expect(updateNotice('0.8.13', answer, visitor)).toContain('9.0.0');
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  it('ignores an answer without a version', () => {
+    expect(updateNotice('0.8.13', null, { ...visitor, debug: true })).toBeNull();
+    expect(updateNotice('0.8.13', { accepted: 1 }, { ...visitor, debug: true })).toBeNull();
+  });
+});
