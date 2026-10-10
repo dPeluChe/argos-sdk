@@ -1,3 +1,6 @@
+import { beforeEach } from 'vitest';
+import { forgetPages } from '../src/pageviews.js';
+
 // Node 26 owns a `localStorage` global that stays undefined without
 // --localstorage-file, and it shadows the one happy-dom installs. Put a real
 // Storage back so the storage tests exercise the browser path.
@@ -40,3 +43,8 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
 // No test may reach the network: a heartbeat timer firing after a test's own
 // fetch stub was restored would otherwise resolve a real hostname.
 globalThis.fetch = () => Promise.reject(new TypeError('network disabled in tests'));
+
+// Each test is a fresh document: the last reported page must not carry over.
+beforeEach(() => {
+  forgetPages();
+});

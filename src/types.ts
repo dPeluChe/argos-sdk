@@ -64,6 +64,13 @@ export interface InitOptions {
   /** Emit one `web_vital` event per metric on page hide. Off by default. */
   webVitals?: boolean;
   /**
+   * Report how long each page is actually looked at, as `page_engagement`
+   * events (visible and focused time, plus scroll depth). Sent only for pages
+   * that got a pageview, on route change and on hide. On by default; `false`
+   * turns it off.
+   */
+  engagement?: boolean;
+  /**
    * Track clicks on elements carrying `data-argos-event`, with
    * `data-argos-event-*` becoming props. Off by default, like the rest.
    *

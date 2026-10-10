@@ -2,10 +2,13 @@ import { uuidv4, uuidv7 } from './ids.js';
 import type { KeyValueStore } from './storage.js';
 
 export const SESSION_IDLE_MS = 30 * 60 * 1000;
+/** A tab left open all day is not one visit. */
+export const SESSION_MAX_MS = 24 * 60 * 60 * 1000;
 
 const ANON_ID = 'argos.anon_id';
 const SESSION_ID = 'argos.session_id';
 const SEEN_AT = 'argos.session_seen_at';
+const STARTED_AT = 'argos.session_started_at';
 const USER_ID = 'argos.user_id';
 const ACCOUNT_ID = 'argos.account_id';
 const ENTRY_SENT = 'argos.entry_sent';
@@ -31,17 +34,30 @@ export class Identity {
     return id;
   }
 
-  /** Reading the session id *is* the activity signal: it renews and re-arms the idle window. */
+  /** The session an event belongs to. Tracking *is* the activity signal: it renews the idle window. */
   sessionId(): string {
+    const id = this.peekSessionId();
+    this.session.set(SEEN_AT, String(this.now()));
+    return id;
+  }
+
+  /** The current session without counting as activity (background polls, error reports). */
+  peekSessionId(): string {
     const at = this.now();
     const seenAt = Number(this.session.get(SEEN_AT));
-    const idle = !Number.isFinite(seenAt) || at - seenAt >= SESSION_IDLE_MS;
+    const startedAt = Number(this.session.get(STARTED_AT) ?? seenAt);
+    const expired =
+      !Number.isFinite(seenAt) ||
+      at - seenAt >= SESSION_IDLE_MS ||
+      !Number.isFinite(startedAt) ||
+      at - startedAt >= SESSION_MAX_MS;
     let id = this.session.get(SESSION_ID);
-    if (!id || idle) {
+    if (!id || expired) {
       id = uuidv7();
       this.session.set(SESSION_ID, id);
+      this.session.set(STARTED_AT, String(at));
+      this.session.set(SEEN_AT, String(at));
     }
-    this.session.set(SEEN_AT, String(at));
     return id;
   }
 

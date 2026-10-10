@@ -247,6 +247,7 @@ why there was none), each flush's result and the startup heartbeat's.
 | `maxBufferSize`   | `1000`       | Past this the oldest events are dropped and counted          |
 | `autoPageviews`   | `false`      | `true` or `{ ignoreParams, hashMode }` — see below           |
 | `webVitals`       | `false`      | One `web_vital` event per metric, on page hide               |
+| `engagement`      | `true`       | `page_engagement` events: engaged time per page — see below  |
 | `autoClicks`      | `false`      | Track elements marked `data-argos-event` — see below         |
 | `requireConsent`  | `false`      | See "Consent" above                                          |
 | `debug`           | `false`      | Log what the SDK does to the console — see below             |
@@ -279,8 +280,10 @@ yet to know `debug` was asked for. With `debug` off, nothing is written.
 init({ dsn, autoPageviews: true });
 ```
 
-Fires on load, on `history.pushState` / `replaceState`, and on `popstate`.
-Props: `path`, `title`, `previous_path`, plus the attribution below.
+Fires on load, on `history.pushState` / `replaceState`, on `popstate`, and on a
+back/forward cache restore. A prerendered page counts once it is shown.
+Props: `path`, `title`, `previous_path`, `pageview_id`, plus the attribution
+below.
 
 A pageview is emitted only when the **page identity** changes. That identity is
 the pathname plus the query parameters that select content, sorted; `utm_*` and
@@ -293,7 +296,18 @@ page, not a second pageview.
 | `ignoreParams` | click ids | Replaces the built-in list; `utm_*` is always ignored on top of it |
 | `hashMode`     | `false`   | Make the hash part of the identity, for hash-based routers         |
 
-`close()` restores the original `pushState` and `replaceState`.
+`close()` restores the original `pushState` and `replaceState`. Calling `init()`
+again on the same page (React StrictMode, hot reload) does not count it twice,
+and neither does a manual `pageview()` for the page already reported.
+
+### Engaged time
+
+Every page that got a pageview also reports how long it was actually looked
+at: `page_engagement` with `pageview_id`, `path`, `engaged_ms` and
+`scroll_depth` (0-100). The clock runs only while the tab is visible and the
+window focused, and the report goes out on the next navigation or when the page
+is hidden, so the last page of a visit counts too. `engagement: false` turns it
+off.
 
 ### Attribution
 

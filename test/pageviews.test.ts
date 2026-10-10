@@ -156,3 +156,68 @@ describe('PageviewTracker', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('PageviewTracker across the page lifecycle', () => {
+  beforeEach(() => {
+    originalReplaceState.call(globalThis.history, {}, '', '/');
+  });
+
+  afterEach(() => {
+    globalThis.history.pushState = originalPushState;
+    globalThis.history.replaceState = originalReplaceState;
+  });
+
+  it('does not report the page again when init runs twice (StrictMode, HMR)', () => {
+    const first = newTracker();
+    first.tracker.start();
+    first.tracker.stop();
+    const second = newTracker();
+    second.tracker.start();
+    globalThis.history.pushState({}, '', '/pricing');
+    second.tracker.stop();
+    expect(first.emitted).toHaveLength(1);
+    expect(second.emitted).toEqual([
+      expect.objectContaining({ path: '/pricing', previous_path: '/' }),
+    ]);
+  });
+
+  it('reports a page restored from the back/forward cache', () => {
+    const { tracker, emitted } = newTracker();
+    tracker.start();
+    globalThis.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    globalThis.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    tracker.stop();
+    expect(emitted.map((props) => props.path)).toEqual(['/', '/']);
+  });
+
+  it('counts a hash navigation once in hashMode, though popstate fires too', () => {
+    const { tracker, emitted } = newTracker({ hashMode: true });
+    tracker.start();
+    originalPushState.call(globalThis.history, {}, '', '/#/orders');
+    globalThis.dispatchEvent(new Event('popstate'));
+    globalThis.dispatchEvent(new Event('hashchange'));
+    tracker.stop();
+    expect(emitted.map((props) => props.path)).toEqual(['/', '/#/orders']);
+  });
+
+  it('waits for a prerendered page to be shown', () => {
+    Object.defineProperty(document, 'prerendering', { configurable: true, value: true });
+    const { tracker, emitted } = newTracker();
+    tracker.start();
+    expect(emitted).toHaveLength(0);
+    Object.defineProperty(document, 'prerendering', { configurable: true, value: false });
+    document.dispatchEvent(new Event('prerenderingchange'));
+    tracker.stop();
+    expect(emitted).toHaveLength(1);
+    Reflect.deleteProperty(document, 'prerendering');
+  });
+
+  it('drops a same-site referrer: a new tab of this app is not a source', () => {
+    vi.spyOn(document, 'referrer', 'get').mockReturnValue(`${location.origin}/settings`);
+    const { tracker, emitted } = newTracker();
+    tracker.start();
+    tracker.stop();
+    expect(emitted[0]).not.toHaveProperty('referrer');
+    vi.restoreAllMocks();
+  });
+});
