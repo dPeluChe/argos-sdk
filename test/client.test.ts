@@ -340,6 +340,22 @@ describe('automatic capture', () => {
     expect(sentEvents().map((event) => event.props?.path)).toEqual(['/docs', '/docs/install']);
   });
 
+  it('shares one visit across tabs: the session lives in localStorage', async () => {
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: true });
+    await client.flush();
+    client.close();
+    expect(localStorage.getItem('argos.session_id')).toBe(sentEvents()[0].session_id);
+  });
+
+  it('sends the title the router sets right after navigating', async () => {
+    const client = new ArgosClient({ dsn: DSN, autoPageviews: true, engagement: false });
+    globalThis.history.pushState({}, '', '/pricing');
+    document.title = 'Pricing';
+    await client.flush();
+    client.close();
+    expect(sentEvents()[1].props).toMatchObject({ path: '/pricing', title: 'Pricing' });
+  });
+
   it('unpatches history on close', () => {
     const client = new ArgosClient({ dsn: DSN, autoPageviews: true });
     expect(globalThis.history.pushState).not.toBe(originalPushState);

@@ -24,9 +24,11 @@ import { dirname, resolve } from 'node:path';
 // Startup heartbeat: +1.5 KB raw / +400 B gzip (daily gate, Sentry detection, payload).
 // 0.8.13: +5.5 KB raw / +1.3 KB gzip for engaged time per page, pageview_id,
 // bfcache/prerender/hashchange handling and the 24-hour session cap.
+// 0.8.14: +1.9 KB raw / +650 B gzip for the outdated-SDK notice, the reading
+// heartbeat and the title re-read after navigation.
 const BUDGETS = [
-  { entry: 'dist/index.js', maxRawBytes: 43_600, maxGzipBytes: 13_550 },
-  { entry: 'dist/index.cjs', maxRawBytes: 43_600, maxGzipBytes: 13_550 },
+  { entry: 'dist/index.js', maxRawBytes: 45_900, maxGzipBytes: 14_250 },
+  { entry: 'dist/index.cjs', maxRawBytes: 45_900, maxGzipBytes: 14_250 },
 ];
 
 const IMPORT = /from\s*['"](\.[^'"]+)['"]/g;

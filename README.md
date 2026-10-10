@@ -98,6 +98,12 @@ checked in under `components`.
 }
 ```
 
+The answer names the newest SDK (`{"accepted": 1, "latest_sdk": "0.8.14"}`).
+When the installed one is older, the SDK prints one `console.warn` with the
+install command, for the developer: on a server, outside `production`, on
+`localhost` or with `debug` on. A production page in a visitor's browser stays
+quiet; the Argos interface shows the same notice on the project instead.
+
 That is the whole body: no ids, no URL, nothing about the visitor. `environment`
 and `release` are the ones events carry. `sentry` is a Sentry SDK found on the
 page or process (read off its global, never imported), or `null`.
@@ -305,9 +311,9 @@ and neither does a manual `pageview()` for the page already reported.
 Every page that got a pageview also reports how long it was actually looked
 at: `page_engagement` with `pageview_id`, `path`, `engaged_ms` and
 `scroll_depth` (0-100). The clock runs only while the tab is visible and the
-window focused, and the report goes out on the next navigation or when the page
-is hidden, so the last page of a visit counts too. `engagement: false` turns it
-off.
+window focused, and the report goes out on the next navigation, when the page
+is hidden, and every minute of reading in between, so the last page of a visit
+counts too. `engagement: false` turns it off.
 
 ### Attribution
 
@@ -927,10 +933,11 @@ argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --ds
 ## Behaviour worth knowing
 
 - **`anon_id`** — UUIDv4 in `localStorage`, stable across visits.
-- **`session_id`** — UUIDv7 in `sessionStorage`, renewed after 30 minutes of
-  inactivity. Any tracked event or outbound instrumented request counts as
-  activity.
-- **`argos.entry_sent`** — internal `sessionStorage` key holding the session id
+- **`session_id`** — UUIDv7 in `localStorage`, so every tab of the app shares
+  the visit, renewed after 30 minutes of inactivity or 24 hours of life. Tracked
+  events and engaged reading count as activity; correlation headers and
+  `correlation()` do not.
+- **`argos.entry_sent`** — internal `localStorage` key holding the session id
   whose first pageview has been sent, so screen, viewport, language and time zone ride on
   one pageview per session only. Not an API; do not read or write it.
 - **Storage blocked** (private mode, blocked cookies) degrades to in-memory

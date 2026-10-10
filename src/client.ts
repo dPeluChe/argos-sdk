@@ -40,7 +40,8 @@ export class ArgosClient {
     const local = (this.local = createStore('localStorage'));
     this.heartbeat = options.heartbeat !== false;
     this.consent = new Consent(local, options.requireConsent ?? false);
-    this.identity = new Identity(local, createStore('sessionStorage'));
+    // One visit across tabs; see docs/DEVELOPMENT.md.
+    this.identity = new Identity(local, local);
     this.environment = options.environment ?? 'production';
     this.release = options.release;
     this.log = logger(options.debug);
@@ -121,13 +122,18 @@ export class ArgosClient {
   }
 
   track(name: string, props?: Props, sessionId?: string): void {
+    this.queue(name, props, sessionId);
+  }
+
+  private queue(name: string, props?: Props, sessionId?: string): ArgosEvent | undefined {
     // Checked here rather than in the transport: `buildEvent` reads the
     // identity, and reading it is what creates and stores an `anon_id`. The
     // gate has to sit in front of that, not in front of the send.
-    if (!this.gate(`drop ${name}`)) return;
+    if (!this.gate(`drop ${name}`)) return undefined;
     const event = this.buildEvent(name, props, sessionId);
     this.log?.(`queue ${event.kind} ${event.name}`);
     this.transport.enqueue(event);
+    return event;
   }
 
   /** Deduplicated against the last page reported, auto or manual. */
@@ -146,7 +152,16 @@ export class ArgosClient {
     this.engagement?.flush();
     const id = uuidv4();
     const sessionId = this.identity.sessionId();
-    this.track('pageview', { ...this.pageviewProps(props), pageview_id: id }, sessionId);
+    const event = this.queue(
+      'pageview',
+      { ...this.pageviewProps(props), pageview_id: id },
+      sessionId,
+    );
+    // Routers set the title just after pushState; the event is still buffered.
+    queueMicrotask(() => {
+      const title = (globalThis.document as Document | undefined)?.title;
+      if (event?.props && title) event.props.title = title;
+    });
     if (this.engagement) {
       this.page = { id, path: props.path as string, sessionId };
       this.engagement.start();
@@ -157,6 +172,7 @@ export class ArgosClient {
   /** Filed under the visit the page was viewed in, which may have gone idle since. */
   private reportEngagement(report: EngagementReport): void {
     if (!this.page) return;
+    if (this.identity.peekSessionId() === this.page.sessionId) this.identity.sessionId();
     this.track(
       'page_engagement',
       { pageview_id: this.page.id, path: this.page.path, ...report },

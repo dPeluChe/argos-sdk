@@ -5,6 +5,9 @@ export interface EngagementReport {
 }
 
 const MIN_REPORT_MS = 1_000;
+// Report every minute of reading; see docs/DEVELOPMENT.md.
+const HEARTBEAT_MS = 60_000;
+const CHECK_EVERY_MS = 15_000;
 
 /** Visible, focused time on the current page, reported as deltas. See docs/DEVELOPMENT.md. */
 export class EngagementTracker {
@@ -13,6 +16,7 @@ export class EngagementTracker {
   private maxScroll = 0;
   private reportedScroll = 0;
   private detach: (() => void) | undefined;
+  private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private readonly report: (report: EngagementReport) => void,
@@ -33,7 +37,11 @@ export class EngagementTracker {
     globalThis.addEventListener('focus', sync);
     globalThis.addEventListener('blur', sync);
     globalThis.addEventListener('scroll', onScroll, { passive: true });
+    this.timer = setInterval(() => {
+      this.beat();
+    }, CHECK_EVERY_MS);
     this.detach = () => {
+      clearInterval(this.timer);
       doc.removeEventListener('visibilitychange', sync);
       globalThis.removeEventListener('focus', sync);
       globalThis.removeEventListener('blur', sync);
@@ -66,6 +74,13 @@ export class EngagementTracker {
       this.reportedScroll = this.maxScroll;
     }
     this.sync();
+  }
+
+  private beat(): void {
+    if (this.activeSince === undefined) return;
+    this.pause();
+    this.sync();
+    if (this.pending >= HEARTBEAT_MS) this.flush();
   }
 
   private sync(): void {

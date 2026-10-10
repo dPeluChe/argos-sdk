@@ -16,6 +16,8 @@ export interface Attempt {
   /** `null` means the request never got an answer — DNS, offline, CORS, aborted. */
   status: number | null;
   retryAfter: string | null;
+  /** The parsed JSON body, read only when asked for. */
+  answer?: unknown;
 }
 
 export function retryAfterMs(header: string | null | undefined, now = Date.now()): number | null {
@@ -46,7 +48,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function post(url: string, publicKey: string, body: string, log?: Log): Promise<Attempt> {
+async function post(
+  url: string,
+  publicKey: string,
+  body: string,
+  log?: Log,
+  read = false,
+): Promise<Attempt> {
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -59,7 +67,8 @@ async function post(url: string, publicKey: string, body: string, log?: Log): Pr
       const detail = status >= 400 && status < 500 ? await response.text().catch(() => '') : '';
       log(`ingest ${String(status)} ${detail.slice(0, 300)}`.trim());
     }
-    return { status: response.status, retryAfter: response.headers.get('Retry-After') };
+    const answer: unknown = read && response.ok ? await response.json().catch(() => null) : null;
+    return { status: response.status, retryAfter: response.headers.get('Retry-After'), answer };
   } catch {
     log?.('ingest unreachable');
     return { status: null, retryAfter: null };
@@ -73,9 +82,29 @@ export async function deliver(
   body: string,
   log?: Log,
 ): Promise<boolean> {
+  return (await send(url, publicKey, body, log, false)) !== false;
+}
+
+/** Like `deliver`, resolving the parsed JSON answer (null when it had none) or `false`. */
+export async function deliverForAnswer(
+  url: string,
+  publicKey: string,
+  body: string,
+  log?: Log,
+): Promise<unknown> {
+  return send(url, publicKey, body, log, true);
+}
+
+async function send(
+  url: string,
+  publicKey: string,
+  body: string,
+  log: Log | undefined,
+  read: boolean,
+): Promise<unknown> {
   for (let attempt = 0; ; attempt++) {
-    const result = await post(url, publicKey, body, log);
-    if (result.status !== null && result.status < 400) return true;
+    const result = await post(url, publicKey, body, log, read);
+    if (result.status !== null && result.status < 400) return result.answer ?? null;
     const plan = planRetry(result, attempt);
     if (!plan.retry) return false;
     log?.(`retry ${String(attempt + 1)} in ${String(plan.delayMs)}ms`);

@@ -14,9 +14,10 @@ const ACCOUNT_ID = 'argos.account_id';
 const ENTRY_SENT = 'argos.entry_sent';
 
 /**
- * `anon_id` lives in localStorage (one device), `session_id` in sessionStorage
- * (one visit). Both are read through the stores, so a page navigation that
- * rebuilds the client still lands on the same ids.
+ * `anon_id` lives in `local` (one device) and the visit in `session`, which the
+ * browser client also points at localStorage so every tab shares the visit.
+ * Both are read through the stores, so a client rebuilt on the next page still
+ * lands on the same ids.
  */
 export class Identity {
   constructor(
