@@ -1,5 +1,11 @@
 # Development
 
+## Stack
+
+TypeScript (strict), tsup (ESM + CJS), Vitest with happy-dom, ESLint and
+Prettier. Node >= 20. Zero runtime dependencies. Sentry 11 is a dev dependency,
+used only by the type test.
+
 ## Layout
 
 ```
@@ -31,6 +37,9 @@ test/
   types/          compile-only Sentry 11 type test, run by npm run typecheck
 scripts/
   size-budget.mjs bundle byte budget, run by npm run size
+.github/workflows/
+  ci.yml                  the gates below, on every PR
+  release-tarball.yml     tarball upload on a v* tag
 ```
 
 One package. The server half and the CLI are separate tsup entries of it, not
@@ -49,6 +58,8 @@ every PR, on Node 20, 22 and 24:
 | Build | `npm run build`: tsup, ESM + CJS + `.d.ts`, plus the CLI                           |
 | Size  | `npm run size`: gzip and raw byte budget for the browser bundle                    |
 
+`make help` lists every target.
+
 CI adds one step `make check` does not: `init()` in a bare Node process must
 exit on its own (the flush timer is unref'd).
 
@@ -56,6 +67,22 @@ Releases are cut by tag: a `v*` tag runs `release-tarball.yml`, which checks the
 tag equals `package.json`'s version and uploads the `npm pack` tarball to the
 GitHub release. The flow across repos is in
 [`../../docs/GUIDES/RELEASES.md`](../../docs/GUIDES/RELEASES.md).
+
+## Rules for this repo
+
+- `init()` never throws; every entry point is a no-op before `init` and after
+  `close`. Nothing here may break the host app.
+- No runtime dependencies. UUIDv7, Trace Context and Baggage are in-house.
+- The correlation keys are a wire contract with
+  `argos-workers/internal/envelope/correlate.go`; `test/sentry.test.ts` pins
+  them. Do not rename them.
+- `test/readme.test.ts` pins the `### Recipe: <stack>` headings in the README;
+  the frontend links to those anchors. Rename one and the links break silently.
+- Raising a size budget is deliberate, in the commit that needs it, with the
+  reason in the message.
+- Change through a branch and a PR. Never push to main. Version bumps and tags
+  are a separate release step.
+- Code, comments, docs and commits in English; comments say why, not what.
 
 ## Configuration
 
