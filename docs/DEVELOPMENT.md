@@ -4,36 +4,58 @@
 
 ```
 src/
-  index.ts       public surface — module-level singleton over ArgosClient
-  client.ts      assembles identity + transport, builds contract-shaped events
-  types.ts       the wire types from ../../docs/INGEST_API.md
-  dsn.ts         Sentry-shaped DSN parsing, endpoint URLs
-  ids.ts         UUIDv4, UUIDv7, trace-id, span-id
-  session.ts     anon_id / session_id / user_id and the idle window
-  storage.ts     localStorage / sessionStorage with an in-memory fallback
-  trace.ts       traceparent and baggage encoding
-  transport.ts   buffer, flush triggers, retry policy, sendBeacon
-  instrument.ts  the opt-in fetch wrapper and its origin allowlist
-  pageviews.ts   history patching, page identity, SPA pageviews
-  context.ts     campaign parameters and the browser-only entry context
-  vitals.ts      LCP, CLS, INP, FCP, TTFB on PerformanceObserver
+  index.ts        public surface, a module-level singleton over ArgosClient
+  client.ts       assembles identity + transport, builds contract-shaped events
+  types.ts        the wire types from ../../docs/INGEST_API.md
+  dsn.ts          Sentry-shaped DSN parsing, endpoint URLs
+  ids.ts          UUIDv4, UUIDv7, trace-id, span-id
+  session.ts      anon_id / session_id / user_id / account_id and the idle window
+  storage.ts      localStorage / sessionStorage with an in-memory fallback
+  consent.ts      requireConsent gate and its sticky refusal
+  trace.ts        traceparent and baggage encoding
+  transport.ts    buffer, flush triggers, retry policy, sendBeacon
+  outbox.ts       events that could not be delivered, resent by the next visit
+  instrument.ts   the opt-in fetch wrapper and its origin allowlist
+  pageviews.ts    history patching, page identity, SPA pageviews
+  engagement.ts   engaged time per page
+  clicks.ts       data-argos-event click tracking
+  context.ts      campaign parameters and the browser-only entry context
+  vitals.ts       LCP, CLS, INP, FCP, TTFB on PerformanceObserver
+  heartbeat.ts    startup heartbeat, Sentry detection, outdated-SDK notice
+  sentry.ts       argosBeforeSend and correlate()
+  debug.ts        the [argos] console logger
+  server/         @argos/browser/server: initServer, visit(), spineFrom()
+  cli/            argos-sourcemaps
 test/
-  setup.ts       storage polyfill, see "Test environment"
+  setup.ts        storage polyfill, see "Test environment"
+  types/          compile-only Sentry 11 type test, run by npm run typecheck
+scripts/
+  size-budget.mjs bundle byte budget, run by npm run size
 ```
 
-One package for now. When the Node and Python SDKs arrive, this becomes
-`packages/browser` under an npm workspace; nothing in `src/` has to move.
+One package. The server half and the CLI are separate tsup entries of it, not
+separate packages.
 
 ## Gates
 
-`make check` runs all of them, and so does CI on push and PR:
+`make check` runs all of them, and CI runs the same steps on push to main and on
+every PR, on Node 20, 22 and 24:
 
-| Gate  | Command                                                                             |
-| ----- | ----------------------------------------------------------------------------------- |
-| Lint  | `npm run lint` — ESLint `strictTypeChecked`, zero warnings, plus `prettier --check` |
-| Types | `npm run typecheck` — `tsc --noEmit`, strict                                        |
-| Tests | `npm test` — Vitest                                                                 |
-| Build | `npm run build` — tsup, ESM + CJS + `.d.ts`                                         |
+| Gate  | Command                                                                            |
+| ----- | ---------------------------------------------------------------------------------- |
+| Lint  | `npm run lint`: ESLint `strictTypeChecked`, zero warnings, plus `prettier --check` |
+| Types | `npm run typecheck`: `tsc --noEmit`, strict, plus the Sentry 11 type test          |
+| Tests | `npm test`: Vitest                                                                 |
+| Build | `npm run build`: tsup, ESM + CJS + `.d.ts`, plus the CLI                           |
+| Size  | `npm run size`: gzip and raw byte budget for the browser bundle                    |
+
+CI adds one step `make check` does not: `init()` in a bare Node process must
+exit on its own (the flush timer is unref'd).
+
+Releases are cut by tag: a `v*` tag runs `release-tarball.yml`, which checks the
+tag equals `package.json`'s version and uploads the `npm pack` tarball to the
+GitHub release. The flow across repos is in
+[`../../docs/GUIDES/RELEASES.md`](../../docs/GUIDES/RELEASES.md).
 
 ## Configuration
 

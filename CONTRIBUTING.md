@@ -28,6 +28,11 @@ point cannot make the browser bundle look smaller than it is.
   errors correlating and nothing else fails — `test/sentry.test.ts` pins them
   for exactly that reason.
 
+## Releases
+
+Version bumps and tags follow the workspace flow in
+`../docs/GUIDES/RELEASES.md`. A `v*` tag publishes the install tarball.
+
 ## Where to start reading
 
 `README.md` is the API. `docs/DEVELOPMENT.md` covers the build and what was

@@ -1,10 +1,13 @@
 # argos-sdk
 
-Product event and correlation SDKs for [Argos](../docs/ARGOS_SPEC.md).
+Product event and correlation SDK for [Argos](../docs/ARGOS_SPEC.md).
 
-This repo currently holds one package, `@argos/browser` (Stage 1). Node and
-Python SDKs land later and will move this into a workspace — see
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+This repo holds one package, `@argos/browser`, with three entry points: the
+browser half (`@argos/browser`), the Node half (`@argos/browser/server`) and
+the `argos-sourcemaps` CLI. There is no Python SDK: Python services report
+errors through `sentry-sdk` (see [Recipe: python](#recipe-python)). The wire
+format the SDK speaks is [`../docs/INGEST_API.md`](../docs/INGEST_API.md);
+build notes are in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## What it is
 
@@ -50,9 +53,9 @@ implemented here rather than pulled in.
 
 ## Install
 
-Not published to a registry yet: `npm install @argos/browser` returns a 404.
-Install the tarball attached to each GitHub release (a workflow builds and
-uploads it on every `v*` tag):
+Not published to a registry. Install the tarball attached to each GitHub
+release (a workflow builds and uploads it on every `v*` tag; how a release is
+cut is in [`../docs/GUIDES/RELEASES.md`](../docs/GUIDES/RELEASES.md)):
 
 ```bash
 npm install https://github.com/dPeluChe/argos-sdk/releases/download/v<VERSION>/argos-browser-<VERSION>.tgz
@@ -86,7 +89,8 @@ it waits for `grantConsent()`, and after a refusal it is never sent.
 An install that only reports errors cannot prove it is live: no news is not
 evidence. So `init` and `initServer` each send one small heartbeat to
 `POST /api/{project}/heartbeat/`, and the workspace's `/check` lists what has
-checked in under `components`.
+checked in under `components` (contract:
+[`../docs/INGEST_API.md`](../docs/INGEST_API.md)).
 
 ```json
 {
