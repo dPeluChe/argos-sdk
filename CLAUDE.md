@@ -19,3 +19,4 @@ capture errors itself, and there is no Python version.
   link to.
 - `../docs/INGEST_API.md`: the wire contract with ingest.
 - `../docs/GUIDES/RELEASES.md`: version bumps, tags and the release flow.
+- `docs/TASK_TODO.md`: open work for this repo; finished work in `docs/TASK_COMPLETED/`
