@@ -3,10 +3,12 @@
 Finished work for this repo, one file per month.
 
 ## Structure
+
 - `YYMM.md` holds everything completed in that month (`2608.md` = August 2026).
 - Sections are grouped by completion date: `## YYYY-MM-DD: Description`.
 
 ## Rules
+
 1. One file per month, all tasks completed in that month together.
 2. Date each section by the month the commits landed (git log), not by when a checkbox was ticked.
 3. Completed items are `- [x]` checkboxes with a short note on what was built.

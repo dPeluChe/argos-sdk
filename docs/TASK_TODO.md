@@ -10,5 +10,6 @@
 No open items owned by this repo alone. Nothing in the code (TODO/FIXME) or in the repo docs is pending.
 
 Open items that include this SDK but cross repo boundaries, tracked in the workspace backlog:
+
 - Feature flags as a first-class event dimension (sdk, workers, backend).
 - Feedback as its own wire object (sdk, workers).
