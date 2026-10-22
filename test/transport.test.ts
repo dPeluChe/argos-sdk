@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Outbox } from '../src/outbox.js';
 import { Transport, type TransportConfig } from '../src/transport.js';
 import type { ArgosEvent, EventBatch } from '../src/types.js';
 
@@ -208,6 +209,57 @@ describe('the unload flush', () => {
     transport.flushOnUnload();
     expect(sendBeacon).toHaveBeenCalledTimes(1);
     expect(transport.pending).toBe(0);
+  });
+
+  it('splits the buffer into one beacon per maxBatchSize', () => {
+    const sendBeacon = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('navigator', { sendBeacon });
+    const transport = new Transport(config({ maxBatchSize: 20 }));
+    for (let i = 0; i < 50; i++) transport.enqueue(event());
+    sendBeacon.mockClear();
+    transport.flushOnUnload();
+    const sizes = sendBeacon.mock.calls.map(
+      (c) => (JSON.parse((c as [string, string])[1]) as EventBatch).events.length,
+    );
+    expect(sizes).toEqual([20, 20, 10]);
+  });
+
+  it('keeps every beacon body under the byte budget', () => {
+    const sendBeacon = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('navigator', { sendBeacon });
+    const transport = new Transport(config({ maxBatchSize: 1_000 }));
+    for (let i = 0; i < 300; i++) {
+      const e = event();
+      e.props = { blob: 'x'.repeat(1_000) };
+      transport.enqueue(e);
+    }
+    sendBeacon.mockClear();
+    transport.flushOnUnload();
+    expect(sendBeacon.mock.calls.length).toBeGreaterThan(1);
+    let total = 0;
+    for (const call of sendBeacon.mock.calls) {
+      const body = (call as [string, string])[1];
+      expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(61_000);
+      total += (JSON.parse(body) as EventBatch).events.length;
+    }
+    expect(total).toBe(300);
+  });
+
+  it('sends only the chunks the beacon refuses to the outbox', () => {
+    const sendBeacon = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    vi.stubGlobal('navigator', { sendBeacon });
+    const save = vi.fn();
+    const outbox = { save, take: () => [] } as unknown as Outbox;
+    const transport = new Transport(config({ outbox }));
+    for (let i = 0; i < 3; i++) {
+      const e = event();
+      e.props = { blob: 'x'.repeat(35_000) };
+      transport.enqueue(e);
+    }
+    transport.flushOnUnload();
+    expect(sendBeacon).toHaveBeenCalledTimes(3);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls.every((c) => (c as [ArgosEvent[]])[0].length === 1)).toBe(true);
   });
 
   it('does nothing when there is nothing buffered', () => {

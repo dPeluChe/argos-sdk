@@ -6,6 +6,8 @@ export const MAX_ATTEMPTS = 5;
 const BASE_DELAY_MS = 500;
 const MAX_DELAY_MS = 30_000;
 const JSON_TYPE = 'application/json';
+// Browsers cap a beacon or keepalive body near 64 KB; stay under it.
+const UNLOAD_BYTE_BUDGET = 60_000;
 
 export interface RetryPlan {
   retry: boolean;
@@ -201,10 +203,15 @@ export class Transport {
    * `Access-Control-Allow-Origin: *` fails, and the batch is silently dropped.
    */
   flushOnUnload(): void {
-    const batch = this.buffer.splice(0, this.buffer.length);
-    if (batch.length === 0) return;
-    const body = encode(batch);
+    const all = this.buffer.splice(0, this.buffer.length);
     const url = `${this.config.url}?argos_key=${encodeURIComponent(this.config.publicKey)}`;
+    for (const batch of chunkForUnload(all, this.config.maxBatchSize)) {
+      this.beaconOrKeepalive(url, batch);
+    }
+  }
+
+  private beaconOrKeepalive(url: string, batch: ArgosEvent[]): void {
+    const body = encode(batch);
     const nav = globalThis.navigator as Partial<Navigator> | undefined;
     try {
       if (nav?.sendBeacon?.call(nav, url, body)) {
@@ -239,4 +246,28 @@ export class Transport {
 function encode(events: ArgosEvent[]): string {
   const batch: EventBatch = { sent_at: new Date().toISOString(), events };
   return JSON.stringify(batch);
+}
+
+/** Split by count and by encoded size; an event bigger than the budget goes alone. */
+export function chunkForUnload(
+  events: ArgosEvent[],
+  maxCount: number,
+  maxBytes = UNLOAD_BYTE_BUDGET,
+): ArgosEvent[][] {
+  const encoder = new TextEncoder();
+  const chunks: ArgosEvent[][] = [];
+  let current: ArgosEvent[] = [];
+  let bytes = 0;
+  for (const event of events) {
+    const size = encoder.encode(JSON.stringify(event)).length + 1;
+    if (current.length > 0 && (current.length >= maxCount || bytes + size > maxBytes)) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(event);
+    bytes += size;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
