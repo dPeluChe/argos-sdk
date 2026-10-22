@@ -9,8 +9,6 @@
 
 Audit of 2026-10-22, read from code (no bundle or payload measured). Order is priority.
 
-- [ ] Chunk the unload flush `added: 2026-10-22`
-      Outcome: `src/transport.ts:203-227` sends up to `maxBufferSize` (1000) events in one beacon, past the roughly 64 KB cap, and drops them. Split into `maxBatchSize` or byte-budget chunks. Measure real payload sizes first.
 - [ ] Load optional modules on demand `added: 2026-10-22`
       Outcome: vitals, engagement, clicks and heartbeat behind dynamic `import()` or a `/lite` entry (`src/client.ts:4-15`). Not done in the idle-timers PR: `ClickTracker` and `VitalsCollector` are public exports of `src/index.ts`, so a dynamic import cannot split them without an API change (a `/lite` entry); engagement and heartbeat are on by default, so splitting them saves nothing in the default config; `dist/index.js` is 34.6 KB raw plus a 10.8 KB shared chunk.
 - [ ] Fold the startup heartbeat into the first batch `added: 2026-10-22`
