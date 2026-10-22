@@ -11,12 +11,8 @@ Audit of 2026-10-22, read from code (no bundle or payload measured). Order is pr
 
 - [ ] Chunk the unload flush `added: 2026-10-22`
       Outcome: `src/transport.ts:203-227` sends up to `maxBufferSize` (1000) events in one beacon, past the roughly 64 KB cap, and drops them. Split into `maxBatchSize` or byte-budget chunks. Measure real payload sizes first.
-- [ ] Cheaper `pagehide` save `added: 2026-10-22`
-      Outcome: `outbox.save` (`src/outbox.ts:41-47`) stops reading, parsing and rewriting up to 200 events synchronously while the page unloads.
 - [ ] Load optional modules on demand `added: 2026-10-22`
-      Outcome: vitals, engagement, clicks and heartbeat behind dynamic `import()` or a `/lite` entry (`src/client.ts:4-15`); `dist/index.js` is 34.6 KB raw plus a 10.8 KB shared chunk.
-- [ ] Idle timers `added: 2026-10-22`
-      Outcome: engagement's 15 s interval runs only while the tab is visible (`src/engagement.ts:40`); the 5 s flush timer arms on enqueue (`src/transport.ts:161`).
+      Outcome: vitals, engagement, clicks and heartbeat behind dynamic `import()` or a `/lite` entry (`src/client.ts:4-15`). Not done in the idle-timers PR: `ClickTracker` and `VitalsCollector` are public exports of `src/index.ts`, so a dynamic import cannot split them without an API change (a `/lite` entry); engagement and heartbeat are on by default, so splitting them saves nothing in the default config; `dist/index.js` is 34.6 KB raw plus a 10.8 KB shared chunk.
 - [ ] Fold the startup heartbeat into the first batch `added: 2026-10-22`
       Outcome: one request fewer on first load (`src/heartbeat.ts:100`).
 
