@@ -26,9 +26,10 @@ import { dirname, resolve } from 'node:path';
 // bfcache/prerender/hashchange handling and the 24-hour session cap.
 // 0.8.14: +1.9 KB raw / +650 B gzip for the outdated-SDK notice, the reading
 // heartbeat and the title re-read after navigation.
+// Unload chunking: +0.7 KB raw / +220 B gzip to split the beacon under the 64 KB cap.
 const BUDGETS = [
-  { entry: 'dist/index.js', maxRawBytes: 45_900, maxGzipBytes: 14_250 },
-  { entry: 'dist/index.cjs', maxRawBytes: 45_900, maxGzipBytes: 14_250 },
+  { entry: 'dist/index.js', maxRawBytes: 46_700, maxGzipBytes: 14_500 },
+  { entry: 'dist/index.cjs', maxRawBytes: 46_700, maxGzipBytes: 14_500 },
 ];
 
 const IMPORT = /from\s*['"](\.[^'"]+)['"]/g;
