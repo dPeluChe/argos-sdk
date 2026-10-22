@@ -129,6 +129,7 @@ export interface TransportConfig {
 export class Transport {
   private readonly buffer: ArgosEvent[] = [];
   private timer: ReturnType<typeof setInterval> | undefined;
+  private running = false;
   private queue: Promise<void> = Promise.resolve();
   /** Cumulative, never reset: a broken endpoint should stay visible in the data. */
   dropped = 0;
@@ -147,6 +148,7 @@ export class Transport {
       event.props = { ...event.props, 'argos.dropped_events': this.dropped };
     }
     this.buffer.push(event);
+    this.arm();
     if (this.buffer.length >= this.config.maxBatchSize) void this.flush();
   }
 
@@ -160,6 +162,13 @@ export class Transport {
       this.config.log?.(`outbox resend ${String(waiting.length)}`);
       this.buffer.unshift(...waiting);
     }
+    this.running = true;
+    this.arm();
+  }
+
+  /** Idle pages keep no timer: it exists only while something is buffered. */
+  private arm(): void {
+    if (!this.running || this.timer !== undefined || this.buffer.length === 0) return;
     const timer = setInterval(() => void this.flush(), this.config.flushIntervalMs);
     // A pending interval keeps a Node process alive; browsers return a number with no unref.
     (timer as { unref?: () => void }).unref?.();
@@ -167,6 +176,7 @@ export class Transport {
   }
 
   stop(): void {
+    this.running = false;
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
   }
@@ -190,7 +200,11 @@ export class Transport {
       // visit instead. Resending later is free -- ingest deduplicates on the
       // event's own id and time.
       this.save([...batch, ...this.buffer.splice(0, this.buffer.length)]);
-      return;
+      break;
+    }
+    if (this.buffer.length === 0 && this.timer !== undefined) {
+      clearInterval(this.timer);
+      this.timer = undefined;
     }
   }
 

@@ -271,12 +271,30 @@ describe('the unload flush', () => {
 });
 
 describe('the flush timer', () => {
+  it('keeps no timer while the buffer is empty', async () => {
+    vi.useFakeTimers();
+    const transport = new Transport(config());
+    transport.start();
+    expect(vi.getTimerCount()).toBe(0);
+    transport.enqueue(event());
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(vi.getTimerCount()).toBe(0);
+    transport.enqueue(event());
+    expect(vi.getTimerCount()).toBe(1);
+    transport.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    transport.enqueue(event());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('unrefs the interval so a Node process can still exit', () => {
     const unref = vi.fn();
     const handle = { unref } as unknown as ReturnType<typeof setInterval>;
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockReturnValue(handle);
     const transport = new Transport(config());
     transport.start();
+    transport.enqueue(event());
 
     expect(setIntervalSpy).toHaveBeenCalledTimes(1);
     expect(unref).toHaveBeenCalledTimes(1);

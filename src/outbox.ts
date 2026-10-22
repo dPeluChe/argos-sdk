@@ -22,6 +22,9 @@ export const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  */
 export const MAX_EVENTS = 200;
 
+/** Past this size the stored text is parsed and trimmed instead of spliced. */
+const MAX_APPEND_CHARS = 256 * 1024;
+
 /**
  * What did not make it out before the page died.
  *
@@ -40,6 +43,7 @@ export class Outbox {
   /** Adds to whatever is already waiting, newest kept when over the cap. */
   save(events: readonly ArgosEvent[]): void {
     if (events.length === 0) return;
+    if (this.append(events)) return;
     const merged = [...this.read(), ...events];
     const kept = merged.slice(-MAX_EVENTS);
     try {
@@ -48,6 +52,28 @@ export class Outbox {
       // This is the one thing the SDK writes that is large enough to hit a
       // quota. Failing to keep the events is a loss; throwing while a page is
       // unloading is a loss and a broken page.
+    }
+  }
+
+  /**
+   * Splices into the stored array text without parsing it: the unload path
+   * must not spend its last milliseconds on JSON. `take` enforces the cap and
+   * the age, so a skipped read loses nothing.
+   */
+  private append(events: readonly ArgosEvent[]): boolean {
+    const raw = this.store.get(OUTBOX);
+    const added = JSON.stringify(events.slice(-MAX_EVENTS));
+    try {
+      if (!raw) {
+        this.store.set(OUTBOX, added);
+        return true;
+      }
+      if (raw.length > MAX_APPEND_CHARS || !raw.startsWith('[{') || !raw.endsWith('}]'))
+        return false;
+      this.store.set(OUTBOX, `${raw.slice(0, -1)},${added.slice(1)}`);
+      return true;
+    } catch {
+      return true;
     }
   }
 
@@ -66,7 +92,9 @@ export class Outbox {
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) return [];
       const cutoff = this.now() - MAX_AGE_MS;
-      return parsed.filter((event): event is ArgosEvent => usable(event, cutoff));
+      return parsed
+        .filter((event): event is ArgosEvent => usable(event, cutoff))
+        .slice(-MAX_EVENTS);
     } catch {
       // A half-written or foreign value is not a queue. Losing it beats
       // throwing on a page that only wanted to send a pageview.

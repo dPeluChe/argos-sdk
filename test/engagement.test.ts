@@ -115,6 +115,19 @@ describe('EngagementTracker', () => {
     vi.useRealTimers();
   });
 
+  it('runs its interval only while the tab is visible', () => {
+    vi.useFakeTimers();
+    const { tracker } = newTracker();
+    expect(vi.getTimerCount()).toBe(1);
+    setVisibility('hidden');
+    expect(vi.getTimerCount()).toBe(0);
+    setVisibility('visible');
+    expect(vi.getTimerCount()).toBe(1);
+    tracker.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
   it('records the deepest scroll seen and reports when it grows', () => {
     vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(2_000);
     vi.stubGlobal('innerHeight', 500);

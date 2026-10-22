@@ -37,11 +37,8 @@ export class EngagementTracker {
     globalThis.addEventListener('focus', sync);
     globalThis.addEventListener('blur', sync);
     globalThis.addEventListener('scroll', onScroll, { passive: true });
-    this.timer = setInterval(() => {
-      this.beat();
-    }, CHECK_EVERY_MS);
     this.detach = () => {
-      clearInterval(this.timer);
+      this.disarm();
       doc.removeEventListener('visibilitychange', sync);
       globalThis.removeEventListener('focus', sync);
       globalThis.removeEventListener('blur', sync);
@@ -76,6 +73,19 @@ export class EngagementTracker {
     this.sync();
   }
 
+  /** The check interval only matters while the page counts time, i.e. is visible. */
+  private arm(): void {
+    if (this.timer !== undefined) return;
+    this.timer = setInterval(() => {
+      this.beat();
+    }, CHECK_EVERY_MS);
+  }
+
+  private disarm(): void {
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
   private beat(): void {
     if (this.activeSince === undefined) return;
     this.pause();
@@ -86,8 +96,10 @@ export class EngagementTracker {
   private sync(): void {
     if (active()) {
       this.activeSince ??= this.now();
+      if (this.detach) this.arm();
     } else {
       this.pause();
+      this.disarm();
     }
   }
 

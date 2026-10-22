@@ -36,6 +36,25 @@ describe('what did not make it out before the page died', () => {
     expect(outbox.take()).toEqual([]);
   });
 
+  it('appends without parsing what is already stored', () => {
+    const outbox = new Outbox(store, () => NOW);
+    outbox.save([event('a')]);
+    const parse = vi.spyOn(JSON, 'parse');
+    outbox.save([event('b')]);
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
+    expect(outbox.take().map((e) => e.event_id)).toEqual(['a', 'b']);
+  });
+
+  it('keeps the newest MAX_EVENTS when appended past the cap', () => {
+    const outbox = new Outbox(store, () => NOW);
+    outbox.save(Array.from({ length: MAX_EVENTS }, (_, i) => event(`old-${String(i)}`)));
+    outbox.save([event('new')]);
+    const taken = outbox.take();
+    expect(taken).toHaveLength(MAX_EVENTS);
+    expect(taken.at(-1)?.event_id).toBe('new');
+  });
+
   it('drops what ingest would no longer store faithfully', () => {
     const outbox = new Outbox(store, () => NOW);
     outbox.save([event('fresh', NOW - 1000), event('stale', NOW - MAX_AGE_MS - 1000)]);

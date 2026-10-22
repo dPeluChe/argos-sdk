@@ -27,9 +27,11 @@ import { dirname, resolve } from 'node:path';
 // 0.8.14: +1.9 KB raw / +650 B gzip for the outdated-SDK notice, the reading
 // heartbeat and the title re-read after navigation.
 // Unload chunking: +0.7 KB raw / +220 B gzip to split the beacon under the 64 KB cap.
+// Idle timers + append-only outbox: +1.7 KB raw / +0.5 KB gzip (mostly the WHY comments, which tsup keeps).
+// Limits are the measured size plus about 2%.
 const BUDGETS = [
-  { entry: 'dist/index.js', maxRawBytes: 46_700, maxGzipBytes: 14_500 },
-  { entry: 'dist/index.cjs', maxRawBytes: 46_700, maxGzipBytes: 14_500 },
+  { entry: 'dist/index.js', maxRawBytes: 48_600, maxGzipBytes: 15_150 },
+  { entry: 'dist/index.cjs', maxRawBytes: 48_800, maxGzipBytes: 14_600 },
 ];
 
 const IMPORT = /from\s*['"](\.[^'"]+)['"]/g;
