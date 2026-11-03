@@ -4,6 +4,8 @@ export interface KeyValueStore {
   get(key: string): string | null;
   set(key: string, value: string): void;
   remove(key: string): void;
+  /** False when only memory backs it: a value will not outlive this page. */
+  readonly persistent: boolean;
 }
 
 const PROBE_KEY = '__argos_probe__';
@@ -24,6 +26,7 @@ export function createStore(kind: StorageKind): KeyValueStore {
   const memory = new Map<string, string>();
   const backing = probe(kind);
   return {
+    persistent: backing !== null,
     get(key) {
       try {
         return backing?.getItem(key) ?? memory.get(key) ?? null;
@@ -54,6 +57,7 @@ export function createStore(kind: StorageKind): KeyValueStore {
 export function memoryStore(): KeyValueStore {
   const memory = new Map<string, string>();
   return {
+    persistent: false,
     get: (key) => memory.get(key) ?? null,
     set: (key, value) => void memory.set(key, value),
     remove: (key) => {

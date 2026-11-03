@@ -327,6 +327,7 @@ parameters of the **current** URL, when they are there:
 | Prop                                                                  | When                                                           |
 | --------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term` | Present and non-blank in the URL, trimmed, capped at 200 chars |
+| `ref`                                                                 | A `?ref=` value is present, trimmed, capped at 200 chars       |
 | `click_id_source`                                                     | An ad-network click id is present: `gclid`, `fbclid`, …        |
 
 Nothing is remembered between pageviews: a second pageview without a campaign
@@ -335,7 +336,21 @@ is the **parameter name only** — the click id value itself is never sent.
 
 Reporting these is not the same thing as identifying a page. `pageKey()` still
 strips `utm_*` and the click ids, so a campaign-tagged landing is the same page
-as an untagged one.
+as an untagged one. The same goes for `ref`.
+
+### Returning visitors
+
+Every browser pageview carries `visitor_id`: a random UUID, created on the first
+pageview and kept in `localStorage` (`argos.visitor_id`), so a later visit from
+the same browser is recognised. It is not derived from anything about the
+person, uses no cookie and no fingerprinting, and is separate from `anon_id`.
+
+- Nothing is created or sent before consent (`requireConsent`), or after a
+  refusal.
+- Without usable `localStorage` the property is left out rather than replaced by
+  a per-page id.
+- The visitor can clear it by clearing site data. `trackVisitor: false` in
+  `init` turns it off entirely. The Node client never sends it.
 
 And once per visit, on the first pageview, what no request header carries:
 
@@ -937,6 +952,8 @@ argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --ds
 ## Behaviour worth knowing
 
 - **`anon_id`** — UUIDv4 in `localStorage`, stable across visits.
+- **`visitor_id`** — random UUIDv4 in `localStorage` (`argos.visitor_id`), on
+  browser pageviews only; see _Returning visitors_.
 - **`session_id`** — UUIDv7 in `localStorage`, so every tab of the app shares
   the visit, renewed after 30 minutes of inactivity or 24 hours of life. Tracked
   events and engaged reading count as activity; correlation headers and

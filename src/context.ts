@@ -6,6 +6,7 @@ const CAMPAIGN_PARAMS = [
   'utm_campaign',
   'utm_content',
   'utm_term',
+  'ref',
 ] as const;
 
 /**

@@ -53,7 +53,9 @@ describe('campaignProps', () => {
   });
 
   it('leaves click_id_source out for the trackers that are not ad clicks', () => {
-    expect(campaignProps(search('/?_ga=1.2.3&ref=blog&igshid=xyz&mc_cid=1'))).toEqual({});
+    expect(campaignProps(search('/?_ga=1.2.3&ref=blog&igshid=xyz&mc_cid=1'))).toEqual({
+      ref: 'blog',
+    });
   });
 });
 

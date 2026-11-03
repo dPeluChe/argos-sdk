@@ -144,6 +144,11 @@ The consequence when storage is unavailable: `anon_id` stops being stable
 across visits and `session_id` stops surviving navigation. That is the correct
 degradation — the alternative is throwing inside someone's app.
 
+`visitor_id` is the exception to "fall back to memory": a memory-only id changes
+on every page load and would count each one as a new visitor, so `Identity`
+returns none when `KeyValueStore.persistent` is false and the property is
+omitted.
+
 ### Retry policy
 
 Retryable: a rejected `fetch` (offline, DNS, CORS, abort — the browser gives no

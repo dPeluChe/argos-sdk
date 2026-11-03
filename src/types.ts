@@ -94,6 +94,12 @@ export interface InitOptions {
    * so `/check` can show the install is live. On by default; `false` opts out.
    */
   heartbeat?: boolean;
+  /**
+   * Stamp pageviews with `visitor_id`, a random id kept in `localStorage` that
+   * recognises a returning browser. On by default; `false` neither creates nor
+   * sends it. Never sent when consent is missing or storage is unavailable.
+   */
+  trackVisitor?: boolean;
 }
 
 /**
