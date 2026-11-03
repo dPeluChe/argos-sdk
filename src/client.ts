@@ -34,11 +34,13 @@ export class ArgosClient {
   private readonly log: Log | undefined;
   private readonly local: KeyValueStore;
   private readonly heartbeat: boolean;
+  private readonly trackVisitor: boolean;
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
     const local = (this.local = createStore('localStorage'));
     this.heartbeat = options.heartbeat !== false;
+    this.trackVisitor = options.trackVisitor !== false;
     this.consent = new Consent(local, options.requireConsent ?? false);
     // One visit across tabs; see docs/DEVELOPMENT.md.
     this.identity = new Identity(local, local);
@@ -188,6 +190,8 @@ export class ArgosClient {
   private pageviewProps(props: Props): Props {
     const search = (globalThis.location as Location | undefined)?.search ?? '';
     const enriched: Props = { ...props, ...campaignProps(search) };
+    const visitorId = this.trackVisitor ? this.identity.visitorId() : undefined;
+    if (visitorId) enriched.visitor_id = visitorId;
     if (this.identity.claimEntry()) Object.assign(enriched, browserProps());
     return enriched;
   }

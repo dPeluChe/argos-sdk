@@ -91,6 +91,7 @@ describe('what did not make it out before the page died', () => {
 
   it('survives a store that refuses to be written', () => {
     const readOnly = {
+      persistent: true,
       get: () => null,
       set: () => {
         throw new Error('quota');

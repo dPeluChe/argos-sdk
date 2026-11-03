@@ -5,6 +5,7 @@ export const SESSION_IDLE_MS = 30 * 60 * 1000;
 /** A tab left open all day is not one visit. */
 export const SESSION_MAX_MS = 24 * 60 * 60 * 1000;
 
+const VISITOR_ID = 'argos.visitor_id';
 const ANON_ID = 'argos.anon_id';
 const SESSION_ID = 'argos.session_id';
 const SEEN_AT = 'argos.session_seen_at';
@@ -31,6 +32,21 @@ export class Identity {
     if (!id) {
       id = uuidv4();
       this.local.set(ANON_ID, id);
+    }
+    return id;
+  }
+
+  /**
+   * Random id of this browser, for recognising a return visit. Undefined without
+   * durable storage: a per-page id would count every page as a new visitor.
+   * Separate from `anon_id` so the opt-out and the identity alias stay independent.
+   */
+  visitorId(): string | undefined {
+    if (!this.local.persistent) return undefined;
+    let id = this.local.get(VISITOR_ID);
+    if (!id || id.length > 64) {
+      id = uuidv4();
+      this.local.set(VISITOR_ID, id);
     }
     return id;
   }
