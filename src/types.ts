@@ -61,7 +61,7 @@ export interface InitOptions {
   maxBufferSize?: number;
   /** Emit a `pageview` on load and on SPA navigation. Off by default. */
   autoPageviews?: boolean | AutoPageviewOptions;
-  /** Emit one `web_vital` event per metric on page hide. Off by default. */
+  /** Emit one `web_vital` event per metric on page hide. On by default; `false` turns it off. */
   webVitals?: boolean;
   /**
    * Report how long each page is actually looked at, as `page_engagement`

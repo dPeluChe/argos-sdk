@@ -332,6 +332,10 @@ produces a pageview with no attribution rather than an exception.
 
 ### Web vitals semantics
 
+On by default (`webVitals: false` opts out). The collector is imported
+statically, so the default adds no bytes; `start()` is a no-op without a
+`document` because Node's `PerformanceObserver` accepts every type and never fires.
+
 Each metric has a termination rule, and getting it wrong yields plausible wrong
 numbers:
 

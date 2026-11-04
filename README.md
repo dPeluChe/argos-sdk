@@ -256,7 +256,7 @@ why there was none), each flush's result and the startup heartbeat's.
 | `maxBatchSize`    | `50`         | Also the trigger for an immediate flush                      |
 | `maxBufferSize`   | `1000`       | Past this the oldest events are dropped and counted          |
 | `autoPageviews`   | `false`      | `true` or `{ ignoreParams, hashMode }` — see below           |
-| `webVitals`       | `false`      | One `web_vital` event per metric, on page hide               |
+| `webVitals`       | `true`       | One `web_vital` event per metric, on page hide               |
 | `engagement`      | `true`       | `page_engagement` events: engaged time per page — see below  |
 | `autoClicks`      | `false`      | Track elements marked `data-argos-event` — see below         |
 | `requireConsent`  | `false`      | See "Consent" above                                          |
@@ -394,14 +394,19 @@ break a checkout button.
 
 ### Web vitals
 
+On by default; turn it off with `webVitals: false`.
+
 ```ts
-init({ dsn, webVitals: true });
+init({ dsn, webVitals: false });
 ```
 
 LCP, CLS, INP, FCP and TTFB, read straight from `PerformanceObserver` — no
 `web-vitals` dependency. Each metric is reported **once**, on page hide, as
 `track('web_vital', { metric, value, rating, path })`, riding the same unload
-batch as everything else. An entry type the browser does not support (INP on
+batch as everything else: one extra event per metric (up to five) per page view,
+sent only after consent like any other event. The code is already in the
+bundle, so enabling adds no download; the runtime cost is a few
+`PerformanceObserver`s. Nothing starts in Node or without a `document`. An entry type the browser does not support (INP on
 Safari) is skipped silently.
 
 ### instrumentFetch options
