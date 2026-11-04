@@ -91,7 +91,7 @@ export class ArgosClient {
       this.clicks.start();
     }
 
-    if (options.webVitals === true) {
+    if (options.webVitals !== false) {
       this.vitals = new VitalsCollector((report) => {
         const props: Props = {
           metric: report.metric,

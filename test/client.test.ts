@@ -397,6 +397,43 @@ describe('automatic capture', () => {
       props: { metric: 'FCP', value: 1234, rating: 'good', path: '/' },
     });
   });
+
+  describe('web vitals default', () => {
+    let observed: string[];
+    let sendBeacon: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      observed = [];
+      sendBeacon = vi.fn().mockReturnValue(true);
+      vi.stubGlobal('navigator', { sendBeacon });
+      vi.stubGlobal(
+        'PerformanceObserver',
+        class {
+          observe(init: { type: string }): void {
+            observed.push(init.type);
+          }
+          disconnect(): void {}
+        },
+      );
+    });
+
+    it('starts the collector without any option', () => {
+      new ArgosClient({ dsn: DSN }).close();
+      expect(observed).toContain('paint');
+    });
+
+    it('stays off with webVitals: false', () => {
+      new ArgosClient({ dsn: DSN, webVitals: false }).close();
+      expect(observed).toEqual([]);
+    });
+
+    it('sends nothing while consent is pending', () => {
+      const client = new ArgosClient({ dsn: DSN, requireConsent: true });
+      globalThis.dispatchEvent(new Event('pagehide'));
+      client.close();
+      expect(sendBeacon).not.toHaveBeenCalled();
+    });
+  });
 });
 
 /** `init` can answer `undefined` now, which is the point of it never throwing.

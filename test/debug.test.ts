@@ -115,7 +115,7 @@ describe('debug on', () => {
 
   it('reports the beacon on page hide', () => {
     vi.stubGlobal('navigator', { sendBeacon: vi.fn().mockReturnValue(true) });
-    init({ dsn: DSN, debug: true });
+    init({ dsn: DSN, debug: true, webVitals: false });
     track('a');
     globalThis.dispatchEvent(new Event('pagehide'));
 
@@ -124,13 +124,13 @@ describe('debug on', () => {
 
   it('reports what the outbox holds back and resends', () => {
     vi.stubGlobal('navigator', {});
-    const first = new ArgosClient({ dsn: DSN, debug: true });
+    const first = new ArgosClient({ dsn: DSN, debug: true, webVitals: false });
     first.track('a');
     globalThis.dispatchEvent(new Event('pagehide'));
     first.close();
     expect(has('outbox kept 1')).toBe(true);
 
-    const second = new ArgosClient({ dsn: DSN, debug: true });
+    const second = new ArgosClient({ dsn: DSN, debug: true, webVitals: false });
     expect(has('outbox resend 1')).toBe(true);
     second.close();
   });

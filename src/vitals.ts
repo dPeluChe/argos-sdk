@@ -123,6 +123,8 @@ export class VitalsCollector {
   constructor(private readonly emit: (report: VitalReport) => void) {}
 
   start(): void {
+    // Node accepts every entry type silently and never fires: skip the observers.
+    if ((globalThis.document as Document | undefined) === undefined) return;
     this.observe('largest-contentful-paint', (entries) => {
       if (this.lcpSettled) return;
       const last = entries.at(-1);
