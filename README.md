@@ -5,7 +5,8 @@ Product event and correlation SDK for [Argos](../docs/ARGOS_SPEC.md).
 This repo holds one package, `@argos/browser`, with three entry points: the
 browser half (`@argos/browser`), the Node half (`@argos/browser/server`) and
 the `argos-sourcemaps` CLI. There is no Python SDK: Python services report
-errors through `sentry-sdk` (see [Recipe: python](#recipe-python)). The wire
+errors through `sentry-sdk` (see [Recipe: python](#recipe-python)), and
+the same goes for Go and Rust. The wire
 format the SDK speaks is [`../docs/INGEST_API.md`](../docs/INGEST_API.md);
 build notes are in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
@@ -431,7 +432,7 @@ One per stack, each complete on its own: follow only the one the app runs on
 configuration; the Argos app page has the value. The agent brief Argos copies
 for an app with no platform links to these headings, so they keep their names:
 `recipe-browser`, `recipe-nextjs`, `recipe-node`, `recipe-python`,
-`recipe-go`, `recipe-http`. The snippets are the ones the Argos UI renders,
+`recipe-go`, `recipe-rust`, `recipe-http`. The snippets are the ones the Argos UI renders,
 and a test in argos-frontend checks they match.
 
 <!-- prettier-ignore-start -->
@@ -506,9 +507,11 @@ npm install @sentry/browser@^11 @sentry/node@^11 https://github.com/dPeluChe/arg
 // instrumentation-client.ts — Next runs it once in the browser, before
 // hydration, so no layout component is needed.
 import * as Sentry from '@sentry/browser'
-import { init, argosBeforeSend } from '@argos/browser'
+import { init, instrumentFetch, argosBeforeSend } from '@argos/browser'
 
 init({ dsn: process.env.NEXT_PUBLIC_ARGOS_DSN, autoPageviews: true, autoClicks: true })
+// Without this, requests carry no baggage and server errors get no session.
+instrumentFetch()
 Sentry.init({ dsn: process.env.NEXT_PUBLIC_ARGOS_DSN, beforeSend: argosBeforeSend })
 
 // instrumentation.ts — the server. Next has no app.use: every uncaught
@@ -553,7 +556,7 @@ npm install @sentry/node@^11 https://github.com/dPeluChe/argos-sdk/releases/down
 import * as Sentry from '@sentry/node'
 import { initServer } from '@argos/browser/server'
 
-Sentry.init({ dsn: process.env.ARGOS_DSN })
+Sentry.init({ dsn: process.env.ARGOS_DSN, tracesSampleRate: 0.1 })
 const argos = initServer({ dsn: process.env.ARGOS_DSN })
 
 // Per request, not at startup: the session belongs to the caller. The
@@ -573,6 +576,8 @@ app.use((req, res, next) => {
 
 - Scrub: leave `sendDefaultPii` off and attach no request bodies; they carry
   passwords and tokens.
+- Requests: Argos stores a transaction whose `op` is `http.server` as a
+  request and drops the others; sample low and keep health routes out.
 - Fetch-style servers (Hono, Workers): `argos.visit(request.headers)`.
 - Compiled from TypeScript or bundled: upload [source maps](#source-maps).
 
@@ -605,7 +610,7 @@ def scrub(event, hint):
 
 sentry_sdk.init(
     dsn=os.environ["ARGOS_DSN"],
-    traces_sample_rate=0,
+    traces_sample_rate=0.1,
     send_default_pii=False,
     # Bodies and frame locals hold passwords and tokens as plain values
     # that key-based scrubbing cannot see.
@@ -668,6 +673,8 @@ threading.Thread(
 ).start()
 ```
 
+- Requests: Argos stores a transaction whose `op` is `http.server` as a
+  request and drops the others; sample low and keep health routes out.
 - Scrub: keep `before_send=scrub`, `max_request_body_size="never"` and
   `include_local_variables=False`. Bodies and frame locals hold passwords as
   plain values that key-based scrubbing cannot see.
@@ -708,7 +715,7 @@ func main() {
 		Dsn:              os.Getenv("ARGOS_DSN"),
 		Environment:      "production",
 		Release:          release,
-		TracesSampleRate: 0,
+		TracesSampleRate: 0.1,
 		BeforeSend: func(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 			if req := event.Request; req != nil {
 				req.Cookies, req.Data = "", ""
@@ -847,6 +854,205 @@ func argosHeartbeat(environment, release string) {
 - Scrub: keep the `BeforeSend` that drops cookies, bodies and auth headers.
 - `log.Fatal` and `os.Exit` skip the deferred `sentry.Flush`.
 - Heartbeat: once per process start, after `sentry.Init`.
+- Requests: wrap the router in the `sentryhttp` handler from
+  `github.com/getsentry/sentry-go/http` so each request starts an `http.server`
+  transaction.
+
+### Recipe: rust
+
+axum 0.7 on tokio. Set `ARGOS_DSN`. Errors go through the `sentry` crate:
+scrubbed, one hub per request tagged with the caller's visit, panics reported,
+`tracing` `error!` events sent as Sentry events and `info!` and above as logs,
+and each request as an `http.server` transaction (sampled at 0.1, health
+routes skipped, named by the matched route). Verified with `sentry` and
+`sentry-tower` 0.49.5, `axum` 0.7.9 and `tokio` 1.54.
+
+```bash
+cargo add sentry@0.49 --features tracing
+cargo add sentry-tower@0.49 --features http
+cargo add percent-encoding tracing-subscriber
+```
+
+```rust
+use axum::{
+    Router,
+    extract::{MatchedPath, Request},
+    middleware::{self, Next},
+    response::Response,
+    routing::get,
+};
+use percent_encoding::percent_decode_str;
+use sentry::integrations::tracing::{ErrorLayer, LogLayer};
+use sentry_tower::{NewSentryLayer, SentryHttpLayer};
+use tracing_subscriber::{filter::LevelFilter, prelude::*};
+
+const RELEASE: &str = "my-service@1.2.3";
+const SECRET_HEADERS: [&str; 6] = [
+    "authorization",
+    "cookie",
+    "token",
+    "password",
+    "secret",
+    "key",
+];
+
+// sentry::init must run in a plain fn main, before the tokio runtime is built
+// (its worker thread is spawned there). Keep the guard alive until exit:
+// dropping it flushes queued events.
+fn main() {
+    let mut options = sentry::ClientOptions::new()
+        .environment("production")
+        .release(RELEASE)
+        .send_default_pii(false)
+        // Argos keeps only http.server transactions as requests; keep probes out.
+        .traces_sampler(|ctx| {
+            if ctx.name().contains("/health") || ctx.name().contains("/ready") {
+                0.0
+            } else {
+                0.1
+            }
+        })
+        .before_send(|mut event| {
+            if let Some(req) = event.request.as_mut() {
+                req.cookies = None;
+                req.data = None;
+                req.headers.retain(|name, _| {
+                    let name = name.to_ascii_lowercase();
+                    !SECRET_HEADERS.iter().any(|secret| name.contains(secret))
+                });
+            }
+            Some(event)
+        });
+    options.dsn = std::env::var("ARGOS_DSN")
+        .ok()
+        .map(|dsn| dsn.parse().expect("ARGOS_DSN is not a valid DSN"));
+    let _sentry = sentry::init(options);
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(LevelFilter::INFO))
+        .with(ErrorLayer::default().with_filter(LevelFilter::ERROR))
+        .with(LogLayer::new().with_filter(LevelFilter::INFO))
+        .init();
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+        .block_on(serve());
+}
+
+async fn serve() {
+    let app = Router::new()
+        .route("/orders/:id", get(|| async { "ok" }))
+        .route("/health", get(|| async { "ok" }))
+        .layer(middleware::from_fn(tag_visit))
+        .layer(SentryHttpLayer::new().enable_transaction())
+        // Outermost: a fresh hub per request, so tags never leak between
+        // concurrent requests. Panics are reported on it.
+        .layer(NewSentryLayer::<Request>::new_from_top());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+        .await
+        .expect("bind");
+    axum::serve(listener, app).await.expect("serve");
+}
+
+async fn tag_visit(request: Request, next: Next) -> Response {
+    // sentry-tower names the transaction after the raw path (/orders/7); the
+    // matched template keeps the route cardinality bounded in Argos.
+    if let Some(path) = request.extensions().get::<MatchedPath>() {
+        let name = format!("{} {}", request.method(), path.as_str());
+        sentry::configure_scope(|scope| scope.set_transaction(Some(&name)));
+    }
+    let baggage = request
+        .headers()
+        .get("baggage")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    for member in baggage.split(',') {
+        let pair = member.split(';').next().unwrap_or("");
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if !["session_id", "anon_id", "user_id", "account_id"]
+            .iter()
+            .any(|known| key.strip_prefix("argos.") == Some(known))
+        {
+            continue;
+        }
+        // W3C values are percent-encoded: "Acme Corp" arrives as Acme%20Corp.
+        if let Ok(decoded) = percent_decode_str(value.trim()).decode_utf8() {
+            if !decoded.is_empty() {
+                sentry::configure_scope(|scope| {
+                    scope.set_tag(&key.replace("argos.", "argos_"), decoded.as_ref())
+                });
+            }
+        }
+    }
+    next.run(request).await
+}
+```
+
+Heartbeat, once per process start:
+
+```bash
+cargo add reqwest --features json && cargo add serde_json
+```
+
+```rust
+// Once per process start, inside the runtime, after sentry::init:
+// tokio::spawn(argos_heartbeat("production", RELEASE));
+async fn argos_heartbeat(environment: &str, release: &str) {
+    let Some(client) = sentry::Hub::current().client() else {
+        return;
+    };
+    let Some(dsn) = client.dsn().cloned() else {
+        return;
+    };
+    let url = dsn
+        .envelope_api_url()
+        .to_string()
+        .replace("/envelope/", "/heartbeat/");
+    // sentry exposes no SDK version constant; its user agent is "sentry.rust/<version>".
+    let version = client
+        .options()
+        .user_agent
+        .rsplit('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+    let sdk = serde_json::json!({ "name": "sentry.rust", "version": version });
+    let body = serde_json::json!({
+        "environment": environment, "release": release,
+        "runtime": "rust", "sdk": sdk, "sentry": sdk,
+    });
+    let Ok(http) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    else {
+        return;
+    };
+    let _ = http
+        .post(url)
+        .header("X-Argos-Key", dsn.public_key())
+        .json(&body)
+        .send()
+        .await;
+}
+```
+
+- `sentry::init` goes in a plain `fn main`, before the tokio runtime is built;
+  `#[tokio::main]` on that function breaks it. Keep the guard until exit.
+- `std::process::exit` skips the guard drop: return from `main` instead.
+- Scrub: keep the `before_send` that drops cookies, bodies and auth headers.
+- `sentry-tower`'s `axum-matched-path` feature targets axum 0.8, so the recipe
+  names the transaction from axum 0.7's `MatchedPath` itself.
+- A handler that answers its own 500 never reaches Sentry: call
+  `sentry::capture_error(&err)` there.
+- Logs are kept 7 days by default and the project sets a minimum level.
+- CORS: a front end on another origin sends `traceparent` and `baggage`; allow
+  both, or the visit tag never arrives.
 
 ### Recipe: http
 
