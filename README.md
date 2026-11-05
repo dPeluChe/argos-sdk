@@ -67,6 +67,16 @@ with no git or SSH key. `npm install github:dPeluChe/argos-sdk` also works on
 a developer machine (npm clones and builds through `prepare`), but it records
 `git+ssh` in the lockfile and breaks `npm ci` wherever there is no key.
 
+**pnpm.** pnpm 10 and older write this tarball to `pnpm-lock.yaml` without an
+`integrity` hash, and a current pnpm (12) then fails
+`pnpm install --frozen-lockfile` with `ERR_PNPM_MISSING_TARBALL_INTEGRITY`
+(verified with pnpm 10.23 and 12.16). Fix it once and commit the lockfile:
+either delete `pnpm-lock.yaml` and run `pnpm install` (it comes back with the
+hash), or add `integrity: sha512-<hash>,` inside that entry's
+`resolution: {...}`, with the hash from
+`curl -sL <tarball URL> | openssl dgst -sha512 -binary | openssl base64 -A`.
+npm and yarn need nothing more.
+
 The package name stays `@argos/browser`, so every import below is unchanged.
 
 ## Consent, and what is written before it
@@ -438,9 +448,9 @@ and a test in argos-frontend checks they match.
 <!-- prettier-ignore-start -->
 ### Recipe: browser
 
-React, Vite or plain JavaScript. Set `VITE_ARGOS_DSN` (another bundler: its
-public-variable prefix); it is embedded at build time, so a Dockerfile needs
-`ARG VITE_ARGOS_DSN` passed to the build.
+React, Vite, JavaScript or TypeScript. Set `VITE_ARGOS_DSN` (another bundler:
+its public-variable prefix); it is embedded at build time, so a Dockerfile
+needs `ARG VITE_ARGOS_DSN` and `ARG VITE_ARGOS_RELEASE` passed to the build.
 
 ```bash
 npm install https://github.com/dPeluChe/argos-sdk/releases/download/v<VERSION>/argos-browser-<VERSION>.tgz
@@ -485,6 +495,8 @@ Sentry.init({
   // Stamps this visit onto the error. Read per event, so a session
   // renewed after idle is the one the error is filed under.
   beforeSend: argosBeforeSend,
+  environment: 'production',
+  release: import.meta.env.VITE_ARGOS_RELEASE,
 })
 ```
 
@@ -868,10 +880,12 @@ routes skipped, named by the matched route). Verified with `sentry` and
 `sentry-tower` 0.49.5, `axum` 0.7.9 and `tokio` 1.54.
 
 ```bash
-cargo add sentry@0.49 --features tracing
+cargo add sentry@0.49 --no-default-features --features backtrace,contexts,panic,debug-images,reqwest,rustls,tracing
 cargo add sentry-tower@0.49 --features http
 cargo add percent-encoding tracing-subscriber
 ```
+
+The `sentry` features use rustls. The defaults pull OpenSSL into Linux builds (a Docker image then needs `libssl`), which a rustls service does not want; use `native-tls` instead of `rustls` if that is yours. Checked with `cargo check` on both variants.
 
 ```rust
 use axum::{
