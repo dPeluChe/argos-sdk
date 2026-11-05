@@ -880,10 +880,12 @@ routes skipped, named by the matched route). Verified with `sentry` and
 `sentry-tower` 0.49.5, `axum` 0.7.9 and `tokio` 1.54.
 
 ```bash
-cargo add sentry@0.49 --features tracing
+cargo add sentry@0.49 --no-default-features --features backtrace,contexts,panic,debug-images,reqwest,rustls,tracing
 cargo add sentry-tower@0.49 --features http
 cargo add percent-encoding tracing-subscriber
 ```
+
+The `sentry` features use rustls. The defaults pull OpenSSL into Linux builds (a Docker image then needs `libssl`), which a rustls service does not want; use `native-tls` instead of `rustls` if that is yours. Checked with `cargo check` on both variants.
 
 ```rust
 use axum::{
