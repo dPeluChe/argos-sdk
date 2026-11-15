@@ -1,0 +1,581 @@
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { initAgents, spineFrom, type AgentsOptions } from '../src/agents/index.js';
+
+const DSN = 'https://0123456789abcdef0123456789abcdef@ingest.example.com/42';
+const TRACE = '4bf92f3577b34da6a3ce929d0e0e4736';
+const SPAN = '00f067aa0ba902b7';
+const SESSION = '0192f3a7-1c2e-7c31-9a1e-6f0b8c2d4e5a';
+const ANON = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+const NOW = Date.UTC(2026, 10, 15, 12, 0, 0);
+
+interface Span {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  name: string;
+  kind: number;
+  startTimeUnixNano: string;
+  endTimeUnixNano: string;
+  attributes: { key: string; value: Record<string, unknown> }[];
+  status: { code: number; message?: string };
+}
+interface Request {
+  resourceSpans: {
+    resource: { attributes: Span['attributes'] };
+    scopeSpans: { scope: { name: string }; spans: Span[] }[];
+  }[];
+}
+
+let calls: { url: string; init: RequestInit; body: Request }[] = [];
+let respond: () => Response;
+
+function attrs(list: Span['attributes']): Record<string, unknown> {
+  return Object.fromEntries(list.map(({ key, value }) => [key, Object.values(value)[0]]));
+}
+function spansOf(call = 0): Span[] {
+  return calls[call]?.body.resourceSpans[0]?.scopeSpans[0]?.spans ?? [];
+}
+function named(prefix: string, call = 0): Span {
+  const span = spansOf(call).find((s) => s.name.startsWith(prefix));
+  if (!span) throw new Error(`no span starting with ${prefix}`);
+  return span;
+}
+function agents(extra: Partial<AgentsOptions> = {}) {
+  return initAgents({ dsn: DSN, environment: 'staging', release: '1.4.0', ...extra });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+  vi.setSystemTime(NOW);
+  calls = [];
+  respond = () => new Response('{}', { status: 200 });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init: RequestInit) => {
+      calls.push({ url, init, body: JSON.parse(init.body as string) as Request });
+      return Promise.resolve(respond());
+    }),
+  );
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('the wire shape', () => {
+  it('posts OTLP/JSON to the traces endpoint with the project key', async () => {
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end();
+    expect(await a.flush()).toBe(true);
+
+    expect(calls[0]?.url).toBe('https://ingest.example.com/api/42/v1/traces');
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['X-Argos-Key']).toBe('0123456789abcdef0123456789abcdef');
+  });
+
+  it('describes the process on the resource', async () => {
+    const a = agents({ serviceName: 'tasky-worker' });
+    a.turn({ agent: 'tasky' }).end();
+    await a.flush();
+
+    const resource = attrs(calls[0]?.body.resourceSpans[0]?.resource.attributes ?? []);
+    expect(resource).toMatchObject({
+      'service.name': 'tasky-worker',
+      'service.version': '1.4.0',
+      'deployment.environment.name': 'staging',
+      'telemetry.sdk.language': 'nodejs',
+    });
+  });
+
+  it('emits hex ids, nanosecond strings and one trace for the whole turn', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    vi.setSystemTime(NOW + 5);
+    turn.model({ provider: 'anthropic', model: 'claude-x' }).end();
+    vi.setSystemTime(NOW + 20);
+    turn.tool({ name: 'search' }).end();
+    turn.end();
+    await a.flush();
+
+    const spans = spansOf();
+    expect(spans).toHaveLength(3);
+    for (const span of spans) {
+      expect(span.traceId).toMatch(/^[0-9a-f]{32}$/);
+      expect(span.traceId).toBe(turn.traceId);
+      expect(span.spanId).toMatch(/^[0-9a-f]{16}$/);
+      expect(span.startTimeUnixNano).toMatch(/^\d+$/);
+    }
+    const root = named('invoke_agent');
+    expect(root.parentSpanId).toBeUndefined();
+    expect(root.startTimeUnixNano).toBe((BigInt(NOW) * 1_000_000n).toString());
+    expect(root.endTimeUnixNano).toBe((BigInt(NOW + 20) * 1_000_000n).toString());
+    expect(named('chat').parentSpanId).toBe(root.spanId);
+    expect(named('chat').startTimeUnixNano).toBe((BigInt(NOW + 5) * 1_000_000n).toString());
+    expect(named('execute_tool').parentSpanId).toBe(root.spanId);
+  });
+
+  it('names and types each span the way the server reads them', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky', model: 'claude-x' });
+    turn
+      .model({ provider: 'anthropic', model: 'claude-x' })
+      .end({ responseModel: 'claude-x-0925' });
+    turn.tool({ name: 'search' }).end();
+    turn.end();
+    await a.flush();
+
+    expect(attrs(named('invoke_agent tasky').attributes)).toMatchObject({
+      'gen_ai.operation.name': 'invoke_agent',
+      'gen_ai.agent.name': 'tasky',
+      'gen_ai.request.model': 'claude-x',
+    });
+    expect(attrs(named('chat claude-x').attributes)).toMatchObject({
+      'gen_ai.operation.name': 'chat',
+      'gen_ai.provider.name': 'anthropic',
+      'gen_ai.request.model': 'claude-x',
+      'gen_ai.response.model': 'claude-x-0925',
+    });
+    expect(attrs(named('execute_tool search').attributes)).toMatchObject({
+      'gen_ai.operation.name': 'execute_tool',
+      'gen_ai.tool.name': 'search',
+    });
+  });
+
+  it('gives every span a gen_ai attribute, or the server drops it silently', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.model({ provider: 'p', model: 'm' }).end({ error: new Error('x') });
+    turn.tool({ name: 't' }).end({ error: new Error('x') });
+    turn.model({ provider: 'p', model: 'left open' });
+    turn.end({ outcome: 'cancelled' });
+    await a.flush();
+
+    expect(spansOf()).toHaveLength(4);
+    for (const span of spansOf()) {
+      expect(span.attributes.some(({ key }) => key.startsWith('gen_ai.'))).toBe(true);
+    }
+  });
+});
+
+describe('token accounting', () => {
+  it('keeps cached and reasoning tokens as subsets, never adding them', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.model({ provider: 'anthropic', model: 'm' }).end({
+      inputTokens: 1000,
+      outputTokens: 200,
+      cachedInputTokens: 600,
+      cacheWriteTokens: 100,
+      reasoningOutputTokens: 50,
+      costUsd: 0.0123,
+    });
+    turn.end();
+    await a.flush();
+
+    expect(named('chat').attributes).toEqual(
+      expect.arrayContaining([
+        { key: 'gen_ai.usage.input_tokens', value: { intValue: '1000' } },
+        { key: 'gen_ai.usage.output_tokens', value: { intValue: '200' } },
+        { key: 'gen_ai.usage.cache_read.input_tokens', value: { intValue: '600' } },
+        { key: 'gen_ai.usage.cache_creation.input_tokens', value: { intValue: '100' } },
+        { key: 'gen_ai.usage.reasoning.output_tokens', value: { intValue: '50' } },
+        { key: 'gen_ai.usage.cost', value: { doubleValue: 0.0123 } },
+      ]),
+    );
+  });
+
+  it('reports no cost unless the caller has one', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.model({ provider: 'p', model: 'm' }).end({ inputTokens: 5, outputTokens: 1 });
+    turn.end();
+    await a.flush();
+
+    expect(attrs(named('chat').attributes)).not.toHaveProperty('gen_ai.usage.cost');
+  });
+
+  it('sends a bad count as zero rather than something the server cannot parse', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.model({ provider: 'p', model: 'm' }).end({ inputTokens: Number.NaN, outputTokens: -3 });
+    turn.end();
+    await a.flush();
+
+    expect(attrs(named('chat').attributes)).toMatchObject({
+      'gen_ai.usage.input_tokens': '0',
+      'gen_ai.usage.output_tokens': '0',
+    });
+  });
+});
+
+describe('outcomes', () => {
+  it('marks a completed turn on the root', async () => {
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end();
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)['argos.run.outcome']).toBe('completed');
+    expect(named('invoke_agent').status.code).toBe(1);
+  });
+
+  it('fails a turn with an error status and its message', async () => {
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end({ error: new TypeError('boom') });
+    await a.flush();
+
+    const root = named('invoke_agent');
+    expect(attrs(root.attributes)['argos.run.outcome']).toBe('failed');
+    expect(root.status).toEqual({ code: 2, message: 'boom' });
+  });
+
+  it('does not make a cancelled turn an error', async () => {
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end({ outcome: 'cancelled' });
+    await a.flush();
+
+    const root = named('invoke_agent');
+    expect(attrs(root.attributes)['argos.run.outcome']).toBe('cancelled');
+    expect(root.status.code).toBe(0);
+  });
+
+  it('records a throw as failed and rethrows it untouched', async () => {
+    const a = agents();
+    const boom = new Error('provider down');
+
+    await expect(
+      a.turn({ agent: 'tasky' }).run(() => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)['argos.run.outcome']).toBe('failed');
+  });
+
+  it('treats an AbortError as cancelled, in the turn and in the call under it', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    const abort = new DOMException('cut', 'AbortError');
+
+    await expect(
+      turn.run((t) =>
+        t.tool({ name: 'search' }).run(() => {
+          throw abort;
+        }),
+      ),
+    ).rejects.toBe(abort);
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)['argos.run.outcome']).toBe('cancelled');
+    expect(named('invoke_agent').status.code).toBe(0);
+    expect(named('execute_tool').status.code).toBe(0);
+  });
+
+  it('treats an aborted signal as cancelled even when the error is custom', async () => {
+    const a = agents();
+    const controller = new AbortController();
+    const reason = new Error('supervisor cut');
+    controller.abort(reason);
+
+    await expect(
+      a.turn({ agent: 'tasky', signal: controller.signal }).run(() => Promise.reject(reason)),
+    ).rejects.toBe(reason);
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)['argos.run.outcome']).toBe('cancelled');
+  });
+
+  it('keeps a timeout a failure', async () => {
+    const a = agents();
+    const signal = AbortSignal.abort(new DOMException('deadline', 'TimeoutError'));
+
+    await a
+      .turn({ agent: 'tasky', signal })
+      .run(() => {
+        throw signal.reason;
+      })
+      .catch(() => undefined);
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)['argos.run.outcome']).toBe('failed');
+  });
+
+  it('fails a model call that throws and keeps the turn going', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    await turn
+      .model({ provider: 'p', model: 'm' })
+      .run(() => Promise.reject(new Error('429')))
+      .catch(() => undefined);
+    turn.end();
+    await a.flush();
+
+    expect(named('chat').status).toEqual({ code: 2, message: '429' });
+    expect(attrs(named('chat').attributes)['error.type']).toBe('Error');
+  });
+
+  it('reads usage off the result of a wrapped model call', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    const reply = await turn.model({ provider: 'p', model: 'm' }).run(
+      () => ({ text: 'hi', usage: { in: 12, out: 3 } }),
+      (r) => ({ inputTokens: r.usage.in, outputTokens: r.usage.out }),
+    );
+    turn.end();
+    await a.flush();
+
+    expect(reply.text).toBe('hi');
+    expect(attrs(named('chat').attributes)['gen_ai.usage.input_tokens']).toBe('12');
+  });
+
+  it('closes a call left open when the turn ends, and ignores a second end', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.tool({ name: 'slow' });
+    turn.end();
+    turn.end({ error: new Error('late') });
+    await a.flush();
+
+    expect(spansOf()).toHaveLength(2);
+    expect(attrs(named('invoke_agent').attributes)['argos.run.outcome']).toBe('completed');
+  });
+
+  it('ignores the end of a call whose turn already ended', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    const tool = turn.tool({ name: 'slow' });
+    turn.end();
+    await a.flush();
+    tool.end();
+    tool.end();
+    await a.flush();
+
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('content', () => {
+  const content = {
+    input: [{ role: 'user', content: 'the secret prompt' }],
+    output: [{ role: 'assistant', content: 'the secret answer' }],
+  };
+
+  async function run(options: Partial<AgentsOptions>): Promise<string> {
+    const a = agents(options);
+    const turn = a.turn({ agent: 'tasky' });
+    turn.model({ provider: 'p', model: 'm' }).end(content);
+    turn.tool({ name: 't' }).end({ arguments: { q: 'secret arg' }, result: 'secret result' });
+    turn.end();
+    await a.flush();
+    return JSON.stringify(calls[0]?.body);
+  }
+
+  it('is never sent by default, even when the caller hands it over', async () => {
+    const body = await run({});
+
+    expect(body).not.toContain('secret');
+    expect(body).not.toContain('gen_ai.input.messages');
+    expect(body).not.toContain('gen_ai.tool.call');
+  });
+
+  it('is sent as JSON strings when captureContent is on', async () => {
+    await run({ captureContent: true });
+
+    expect(attrs(named('chat').attributes)).toMatchObject({
+      'gen_ai.input.messages': JSON.stringify(content.input),
+      'gen_ai.output.messages': JSON.stringify(content.output),
+    });
+    expect(attrs(named('execute_tool').attributes)).toMatchObject({
+      'gen_ai.tool.call.arguments': '{"q":"secret arg"}',
+      'gen_ai.tool.call.result': '"secret result"',
+    });
+  });
+
+  it('truncates what it sends and survives content that cannot be serialized', async () => {
+    const a = agents({ captureContent: true });
+    const turn = a.turn({ agent: 'tasky' });
+    const circular: Record<string, unknown> = {};
+    circular['self'] = circular;
+    turn.model({ provider: 'p', model: 'm' }).end({ input: 'x'.repeat(50_000), output: circular });
+    turn.end();
+    await a.flush();
+
+    const sent = attrs(named('chat').attributes);
+    expect(String(sent['gen_ai.input.messages']).length).toBe(8192);
+    expect(sent).not.toHaveProperty('gen_ai.output.messages');
+  });
+});
+
+describe('correlation', () => {
+  it('joins the visit it was started from, without borrowing its trace', async () => {
+    const a = agents();
+    const spine = spineFrom({
+      traceparent: `00-${TRACE}-${SPAN}-01`,
+      baggage: `argos.session_id=${SESSION},argos.anon_id=${ANON},argos.user_id=u_1,argos.account_id=acct_7`,
+    });
+    const turn = a.turn({ agent: 'tasky', ...(spine ? { spine } : {}) });
+    turn.tool({ name: 'search' }).end();
+    turn.end();
+    await a.flush();
+
+    for (const span of spansOf()) {
+      expect(attrs(span.attributes)).toMatchObject({
+        'argos.session_id': SESSION,
+        'argos.anon_id': ANON,
+        'argos.user_id': 'u_1',
+        'argos.account_id': 'acct_7',
+      });
+      // A fresh trace keeps this span the root of its run: the server reads a
+      // run's status off the span with no parent.
+      expect(span.traceId).not.toBe(TRACE);
+    }
+    expect(named('invoke_agent').parentSpanId).toBeUndefined();
+  });
+
+  it('lets explicit ids win over the spine and works with no spine at all', async () => {
+    const a = agents();
+    a.turn({
+      agent: 'tasky',
+      spine: {
+        traceId: TRACE,
+        parentSpanId: SPAN,
+        sessionId: SESSION,
+        anonId: ANON,
+        userId: 'u_1',
+      },
+      userId: 'u_2',
+    }).end();
+    a.turn({ agent: 'cron' }).end();
+    await a.flush();
+
+    const roots = spansOf().filter((span) => span.name.startsWith('invoke_agent'));
+    expect(attrs(roots[0]?.attributes ?? [])).toMatchObject({
+      'argos.user_id': 'u_2',
+      'argos.session_id': SESSION,
+    });
+    expect(attrs(roots[1]?.attributes ?? [])).not.toHaveProperty('argos.session_id');
+  });
+
+  it('accepts a Visit-shaped object carrying a spine', async () => {
+    const a = agents();
+    const spine = { traceId: TRACE, parentSpanId: SPAN, sessionId: SESSION, anonId: ANON };
+    a.turn({ agent: 'tasky', spine: { spine } }).end();
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)['argos.session_id']).toBe(SESSION);
+  });
+});
+
+describe('delivery', () => {
+  it('sends nothing for nothing, and sends on a timer when nobody flushes', async () => {
+    const a = agents();
+    expect(await a.flush()).toBe(true);
+    expect(calls).toEqual([]);
+
+    a.turn({ agent: 'tasky' }).end();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports a delivery that was given up on', async () => {
+    respond = () => new Response('bad key', { status: 401 });
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end();
+
+    expect(await a.flush()).toBe(false);
+  });
+
+  it('logs the spans the server rejected, so a drop is not silent', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    respond = () =>
+      new Response(
+        JSON.stringify({ partialSuccess: { rejectedSpans: '2', errorMessage: 'no id' } }),
+      );
+    const a = agents({ debug: true });
+    a.turn({ agent: 'tasky' }).end();
+
+    expect(await a.flush()).toBe(true);
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('server rejected 2 span(s): no id'));
+  });
+
+  it('bounds the queue and counts what it dropped', async () => {
+    const a = agents();
+    for (let i = 0; i < 600; i++) {
+      const turn = a.turn({ agent: `a${String(i)}` });
+      turn.tool({ name: 't' }).end();
+      turn.end();
+    }
+    await a.flush();
+
+    expect(a.dropped).toBe(200);
+    expect(calls.flatMap((_, i) => spansOf(i))).toHaveLength(1000);
+    expect(calls.every((_, i) => spansOf(i).length <= 100)).toBe(true);
+  });
+
+  it('serializes flushes so a second one waits for the first', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const original = fetch;
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) =>
+      calls.length === 0 ? gate.then(() => original(url, init)) : original(url, init),
+    );
+    const a = agents();
+    a.turn({ agent: 'one' }).end();
+    const first = a.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    a.turn({ agent: 'two' }).end();
+    const second = a.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toHaveLength(0);
+
+    release();
+
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('never throws into the host', () => {
+  it('survives an unreachable server', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('offline'))),
+    );
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end();
+    const flushed = a.flush();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(await flushed).toBe(false);
+  });
+
+  it('is inert, not broken, when the DSN is wrong', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const a = initAgents({ dsn: 'not a dsn' });
+    const turn = a.turn({ agent: 'tasky' });
+
+    expect(() => {
+      turn.model({ provider: 'p', model: 'm' }).end({ inputTokens: 1 });
+      turn.end();
+    }).not.toThrow();
+    expect(await a.flush()).toBe(true);
+    expect(calls).toEqual([]);
+    expect(error).toHaveBeenCalled();
+  });
+
+  it('keeps a throwing usage reader from costing the caller its result', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    const result = await turn.model({ provider: 'p', model: 'm' }).run(
+      () => 'reply',
+      () => {
+        throw new Error('bad reader');
+      },
+    );
+
+    expect(result).toBe('reply');
+  });
+});

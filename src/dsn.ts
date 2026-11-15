@@ -51,3 +51,8 @@ export function identifyUrl(endpoint: Endpoint): string {
 export function heartbeatUrl(endpoint: Endpoint): string {
   return `${endpoint.baseUrl}/api/${endpoint.projectId}/heartbeat/`;
 }
+
+/** The path after the project prefix is fixed by OTLP, so there is no trailing slash. */
+export function tracesUrl(endpoint: Endpoint): string {
+  return `${endpoint.baseUrl}/api/${endpoint.projectId}/v1/traces`;
+}

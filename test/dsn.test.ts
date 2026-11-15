@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventsUrl, identifyUrl, parseDsn, resolveEndpoint } from '../src/dsn.js';
+import { eventsUrl, identifyUrl, parseDsn, resolveEndpoint, tracesUrl } from '../src/dsn.js';
 
 describe('parseDsn', () => {
   it('parses the Sentry DSN anatomy', () => {
@@ -60,5 +60,7 @@ describe('endpoint urls', () => {
   it('matches the wire contract paths', () => {
     expect(eventsUrl(endpoint)).toBe('https://ingest.argos.dev/api/42/events/');
     expect(identifyUrl(endpoint)).toBe('https://ingest.argos.dev/api/42/identify/');
+    // OTLP fixes this path: a trailing slash would 404 a real exporter.
+    expect(tracesUrl(endpoint)).toBe('https://ingest.argos.dev/api/42/v1/traces');
   });
 });

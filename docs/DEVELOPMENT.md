@@ -31,6 +31,7 @@ src/
   sentry.ts       argosBeforeSend and correlate()
   debug.ts        the [argos] console logger
   server/         @argos/browser/server: initServer, visit(), spineFrom()
+  agents/         @argos/browser/agents: initAgents, turn(), OTLP/JSON encoding
   cli/            argos-sourcemaps
 test/
   setup.ts        storage polyfill, see "Test environment"
@@ -43,7 +44,8 @@ scripts/
 ```
 
 One package. The server half and the CLI are separate tsup entries of it, not
-separate packages.
+separate packages. The agents module and the CLI are their own tsup builds, so
+they share no chunk with the browser bundle (see "Agent telemetry over OTLP").
 
 ## Gates
 
@@ -362,6 +364,50 @@ Every `observe()` sits in its own `try`, so an unsupported entry type — `event
 on Safari — costs that one metric and nothing else. CLS is reported even at
 zero, because a stable page is a real measurement; INP is not, because "no
 interaction" is not an interaction of 0 ms.
+
+### Agent telemetry over OTLP
+
+`@argos/browser/agents` posts OTLP/JSON to `{baseUrl}/api/{projectId}/v1/traces`
+with the same `X-Argos-Key` as the events endpoint, through `deliver`. The server
+side is `argos-workers/internal/otlp` and its `docs/AGENTS.md`; this is what the
+SDK promises it.
+
+- **One trace per turn**, never the visit's trace. The worker reads a run's
+  status off the span with no parent, so the turn is that root. A turn started
+  from a request joins the visitor's session through `argos.session_id`,
+  `argos.anon_id`, `argos.user_id` and `argos.account_id`, set on every span;
+  the browser's trace id is not reused.
+- **Ids and times**: trace id 32 and span id 16 lowercase hex (the OTLP/JSON
+  deviation from protojson, a silent trap on the server), times as unix
+  nanosecond strings, int64 attributes as decimal strings.
+- **Spans**: `invoke_agent <agent>` (root), `chat <model>` and
+  `execute_tool <name>`. Every one carries `gen_ai.operation.name`, because the
+  server silently drops a span with no `gen_ai.*` attribute and says nothing.
+  Model calls add `gen_ai.provider.name`, `gen_ai.request.model`, optionally
+  `gen_ai.response.model`, and the usage keys
+  `gen_ai.usage.{input_tokens,output_tokens,cache_read.input_tokens,cache_creation.input_tokens,reasoning.output_tokens}`.
+  Cached, cache-write and reasoning counts are subsets and are passed through
+  as given; `gen_ai.usage.cost` is a double in USD and only present when the
+  caller supplied it.
+- **Outcome** is `argos.run.outcome` on the root. Only `failed` sets status
+  ERROR (code 2, message capped at 256 characters, plus `error.type`);
+  `completed` is OK; `cancelled` stays UNSET, because a supervisor cut is not a
+  failure. An open call is closed when its turn ends, and its own later
+  `end()` is ignored.
+- **Resource**: `service.name`, `service.version` (release),
+  `deployment.environment.name`, `telemetry.sdk.{name,version,language}`.
+- **Content** (`gen_ai.input.messages`, `gen_ai.output.messages`,
+  `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`) is only set when
+  `captureContent` is on and the caller passes it, as JSON capped at 8,192
+  characters per attribute. The server drops it by default as well.
+- **Failure** never reaches the agent. A bad DSN leaves an inert instance. The
+  queue is 1,000 spans, oldest dropped; batches are 100 spans. A 2xx answer with
+  `partialSuccess.rejectedSpans` is logged under `debug` and still counts as
+  delivered, because retrying cannot fix a rejected span.
+- **Why a separate tsup build**: as a third entry of the main build, the shared
+  code was split into one more chunk and the browser bundle grew by 330 bytes of
+  chunk plumbing. `scripts/size-budget.mjs` also fails if any file a browser
+  entry loads contains agent code.
 
 ### Why the flush timer is unref'd
 
