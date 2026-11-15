@@ -1,6 +1,7 @@
 import { logger, type Log } from '../debug.js';
 import { resolveEndpoint, tracesUrl, type Endpoint } from '../dsn.js';
 import { newTraceId } from '../ids.js';
+import { sendHeartbeat } from '../heartbeat.js';
 import { deliverForAnswer } from '../transport.js';
 import type { InitOptions } from '../types.js';
 import type { Spine } from '../server/spine.js';
@@ -25,11 +26,15 @@ declare const __ARGOS_VERSION__: string;
 export { spineFrom, type Spine } from '../server/spine.js';
 
 const SCOPE = '@argos/browser/agents';
+const HEARTBEAT_SDK = '@argos/browser/agents';
 const MAX_QUEUE = 1_000;
 const MAX_BATCH = 100;
 const FLUSH_DELAY_MS = 5_000;
 const CONTENT_CAP = 8_192;
 const TEXT_CAP = 256;
+const REQUEST_TIMEOUT_MS = 10_000;
+/** `gen_ai.operation.name` of a step: the server needs one gen_ai.* attribute to keep a span. */
+const STEP_OPERATION = 'step';
 
 export type Outcome = 'completed' | 'failed' | 'cancelled';
 
@@ -42,7 +47,7 @@ export type Attributes = Record<string, string | number | boolean>;
 
 export interface AgentsOptions extends Pick<
   InitOptions,
-  'dsn' | 'projectId' | 'publicKey' | 'host' | 'environment' | 'release' | 'debug'
+  'dsn' | 'projectId' | 'publicKey' | 'host' | 'environment' | 'release' | 'debug' | 'heartbeat'
 > {
   /** `service.name` of the process; defaults to `argos-agents`. */
   serviceName?: string;
@@ -104,6 +109,24 @@ export interface ModelEnd {
 export interface ToolOptions {
   name: string;
   attributes?: Attributes;
+}
+
+export interface StepOptions {
+  /** What the step is (`human_approval`, `retrieval`, `subagent`); also in the span name. */
+  name: string;
+  attributes?: Attributes;
+}
+
+export interface StepEnd {
+  /** Stripped when `captureContent` is `false`. */
+  input?: unknown;
+  output?: unknown;
+  error?: unknown;
+}
+
+export interface FlushOptions {
+  /** Stop waiting after this long: resolves `false` and keeps the undelivered spans for the next flush. */
+  timeoutMs?: number;
 }
 
 export interface ToolRun<T> {
@@ -217,19 +240,50 @@ export class Agents {
       'telemetry.sdk.version': str(__ARGOS_VERSION__),
     };
     if (options.release) this.resource['service.version'] = str(options.release);
+    if (this.endpoint && options.heartbeat !== false) {
+      sendHeartbeat(
+        'process',
+        this.endpoint,
+        {
+          environment: options.environment ?? 'production',
+          release: options.release ?? null,
+          runtime: 'node',
+        },
+        HEARTBEAT_SDK,
+        this.log,
+      );
+    }
   }
 
   turn(options: TurnOptions): Turn {
     return this.attempt(() => new Turn(this, options)) ?? new Turn(this, { agent: 'unknown' });
   }
 
-  /** Sends what has been collected, and resolves whether it was all delivered. */
-  flush(): Promise<boolean> {
+  /**
+   * Sends what has been collected, and resolves whether it was all delivered.
+   * With `timeoutMs` it waits at most that long and then resolves `false`; the
+   * spans it could not deliver stay queued for the next flush.
+   */
+  flush({ timeoutMs }: FlushOptions = {}): Promise<boolean> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    const cut = new AbortController();
     // Chained, so an awaited flush also waits for one already on the wire.
-    this.chain = this.chain.then(() => this.drain());
-    return this.chain;
+    this.chain = this.chain.then(() =>
+      this.drain(timeoutMs === undefined ? undefined : cut.signal),
+    );
+    if (timeoutMs === undefined) return this.chain;
+    // The race is needed: behind a slower flush the abort alone would not return on time.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => {
+        cut.abort();
+        resolve(false);
+      }, timeoutMs);
+    });
+    return Promise.race([this.chain, late]).finally(() => {
+      clearTimeout(timer);
+    });
   }
 
   /** @internal */
@@ -255,27 +309,36 @@ export class Agents {
     this.attempt(() => {
       if (!this.endpoint) return;
       this.queue = this.queue.concat(spans);
-      const over = this.queue.length - MAX_QUEUE;
-      if (over > 0) {
-        this.queue.splice(0, over);
-        this.dropped += over;
-        this.log?.(`queue full: dropped the ${String(over)} oldest span(s)`);
-      }
-      if (this.queue.length >= MAX_BATCH) {
-        void this.flush();
-      } else if (!this.timer) {
-        this.timer = setTimeout(() => void this.flush(), FLUSH_DELAY_MS);
-        // Do not keep a finished process alive for spans: exit paths call flush().
-        (this.timer as { unref?: () => void }).unref?.();
-      }
+      this.trim();
+      if (this.queue.length >= MAX_BATCH) void this.flush();
+      else this.arm();
     });
   }
 
-  private async drain(): Promise<boolean> {
+  private trim(): void {
+    const over = this.queue.length - MAX_QUEUE;
+    if (over <= 0) return;
+    this.queue.splice(0, over);
+    this.dropped += over;
+    this.log?.(`queue full: dropped the ${String(over)} oldest span(s)`);
+  }
+
+  private arm(): void {
+    if (this.timer) return;
+    this.timer = setTimeout(() => void this.flush(), FLUSH_DELAY_MS);
+    // Do not keep a finished process alive for spans: exit paths call flush().
+    (this.timer as { unref?: () => void }).unref?.();
+  }
+
+  private async drain(cut?: AbortSignal): Promise<boolean> {
     const { endpoint } = this;
+    if (!endpoint || this.queue.length === 0) return true;
+    if (cut?.aborted) {
+      this.arm();
+      return false;
+    }
     const batch = this.queue;
     this.queue = [];
-    if (!endpoint || batch.length === 0) return true;
     let delivered = true;
     try {
       for (let i = 0; i < batch.length; i += MAX_BATCH) {
@@ -286,7 +349,15 @@ export class Agents {
           endpoint.publicKey,
           body,
           this.log,
+          { requestTimeoutMs: REQUEST_TIMEOUT_MS, ...(cut && { signal: cut }) },
         );
+        if (answer === false && cut?.aborted) {
+          // Cut short, not refused: this chunk and the rest wait for the next flush.
+          this.queue = batch.splice(i).concat(this.queue);
+          this.trim();
+          this.arm();
+          return false;
+        }
         this.log?.(
           `flush ${String(chunk.length)} span(s): ${answer === false ? 'failed' : 'delivered'}`,
         );
@@ -313,22 +384,63 @@ export class Agents {
   }
 }
 
+/** Where model calls, tool calls and steps open: the turn itself, or a step inside it. */
+export abstract class Scope {
+  /** @internal */
+  protected abstract readonly host: Turn;
+  protected abstract get parentId(): string;
+
+  model(options: ModelOptions = {}): ModelCall {
+    const operation = options.operation ?? 'chat';
+    const provider = options.provider ?? this.host.defaults.provider;
+    const model = options.model ?? this.host.defaults.model;
+    const attrs: Attrs = { 'gen_ai.operation.name': str(operation), ...identity(provider, model) };
+    const name = model ? `${operation} ${model}` : operation;
+    const span = this.host.child(this.parentId, name, KIND_CLIENT, attrs, options.attributes);
+    return new ModelCall(this.host, span);
+  }
+
+  tool(options: ToolOptions): ToolCall {
+    const attrs: Attrs = {
+      'gen_ai.operation.name': str('execute_tool'),
+      'gen_ai.tool.name': str(options.name),
+    };
+    const name = `execute_tool ${options.name}`;
+    const span = this.host.child(this.parentId, name, KIND_INTERNAL, attrs, options.attributes);
+    return new ToolCall(this.host, span);
+  }
+
+  /** A step that is neither a model nor a tool call (an approval, a retrieval, a subagent); steps nest. */
+  step(options: StepOptions): Step {
+    const attrs: Attrs = {
+      'gen_ai.operation.name': str(STEP_OPERATION),
+      'argos.step.name': str(options.name.slice(0, TEXT_CAP)),
+    };
+    const name = `${STEP_OPERATION} ${options.name}`;
+    const span = this.host.child(this.parentId, name, KIND_INTERNAL, attrs, options.attributes);
+    return new Step(this.host, span);
+  }
+}
+
 /** One agent turn: the root span of a trace. */
-export class Turn {
+export class Turn extends Scope {
   /** 32 lowercase hex: a fresh trace per turn, never the visit's, so this span is the run's root. */
   readonly traceId = newTraceId();
   /** @internal */
   readonly signal: AbortSignal | undefined;
+  /** @internal */
+  readonly defaults: Pick<TurnOptions, 'provider' | 'model'>;
+  protected readonly host: Turn = this;
   private readonly root: Draft;
   private readonly correlation: Attrs = {};
   private readonly spans: Draft[] = [];
-  private readonly defaults: Pick<TurnOptions, 'provider' | 'model'>;
   private done = false;
 
   constructor(
     private readonly agents: Agents,
     options: TurnOptions,
   ) {
+    super();
     this.signal = options.signal;
     this.defaults = { provider: options.provider, model: options.model };
     const found = options.spine && ('spine' in options.spine ? options.spine.spine : options.spine);
@@ -352,32 +464,8 @@ export class Turn {
     });
   }
 
-  model(options: ModelOptions = {}): ModelCall {
-    const operation = options.operation ?? 'chat';
-    const provider = options.provider ?? this.defaults.provider;
-    const model = options.model ?? this.defaults.model;
-    const attrs: Attrs = { 'gen_ai.operation.name': str(operation), ...identity(provider, model) };
-    return new ModelCall(
-      this,
-      this.child(
-        model ? `${operation} ${model}` : operation,
-        KIND_CLIENT,
-        attrs,
-        options.attributes,
-      ),
-    );
-  }
-
-  tool(options: ToolOptions): ToolCall {
-    return new ToolCall(
-      this,
-      this.child(
-        `execute_tool ${options.name}`,
-        KIND_INTERNAL,
-        { 'gen_ai.operation.name': str('execute_tool'), 'gen_ai.tool.name': str(options.name) },
-        options.attributes,
-      ),
-    );
+  protected get parentId(): string {
+    return this.root.spanId;
   }
 
   /**
@@ -412,8 +500,7 @@ export class Turn {
       else if (end.reason) {
         this.root.attrs['argos.run.cancel_reason'] = str(end.reason.slice(0, TEXT_CAP));
       }
-      this.content(this.root.attrs, 'gen_ai.input.messages', end.input);
-      this.content(this.root.attrs, 'gen_ai.output.messages', end.output);
+      this.messages(this.root.attrs, end);
     });
     this.agents.accept([this.root, ...this.spans]);
   }
@@ -439,19 +526,26 @@ export class Turn {
   }
 
   /** @internal */
+  messages(attrs: Attrs, { input, output }: { input?: unknown; output?: unknown }): void {
+    this.content(attrs, 'gen_ai.input.messages', input);
+    this.content(attrs, 'gen_ai.output.messages', output);
+  }
+
+  /** @internal */
   content(attrs: Attrs, key: string, value: unknown): void {
     if (!this.capturing || value === undefined) return;
     const text = capped(value, CONTENT_CAP);
     if (text) attrs[key] = text;
   }
 
-  private child(name: string, kind: number, attrs: Attrs, custom?: Attributes): Draft {
+  /** @internal */
+  child(parentId: string, name: string, kind: number, attrs: Attrs, custom?: Attributes): Draft {
     const span = draft(
       this.traceId,
       name,
       kind,
       { ...this.agents.custom(custom), ...this.correlation, ...attrs },
-      this.root.spanId,
+      parentId,
     );
     this.spans.push(span);
     return span;
@@ -474,8 +568,7 @@ export class ModelCall {
       if (typeof end.costUsd === 'number' && Number.isFinite(end.costUsd) && end.costUsd >= 0) {
         attrs['gen_ai.usage.cost'] = dbl(end.costUsd);
       }
-      this.turn.content(attrs, 'gen_ai.input.messages', end.input);
-      this.turn.content(attrs, 'gen_ai.output.messages', end.output);
+      this.turn.messages(attrs, end);
     });
   }
 
@@ -487,6 +580,40 @@ export class ModelCall {
       (result) => {
         // usageOf is caller code: a throw there must not cost the caller its result.
         this.end(this.turn.attempt(() => usageOf?.(result)) ?? {});
+      },
+      (error, cancelled) => {
+        this.end(cancelled ? {} : { error });
+      },
+    );
+  }
+}
+
+export class Step extends Scope {
+  constructor(
+    protected readonly host: Turn,
+    private readonly span: Draft,
+  ) {
+    super();
+  }
+
+  protected get parentId(): string {
+    return this.span.spanId;
+  }
+
+  /** A child still open when its step ends keeps running until it ends or the turn does. */
+  end(end: StepEnd = {}): void {
+    this.host.settle(this.span, end.error, (attrs) => {
+      this.host.messages(attrs, end);
+    });
+  }
+
+  /** Runs `fn` as this step: a throw fails it, an abort leaves it cancelled; the error is rethrown untouched. */
+  run<T>(fn: (step: this) => T | PromiseLike<T>): Promise<T> {
+    return observe(
+      this.host.signal,
+      () => fn(this),
+      () => {
+        this.end();
       },
       (error, cancelled) => {
         this.end(cancelled ? {} : { error });

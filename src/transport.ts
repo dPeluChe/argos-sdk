@@ -46,8 +46,26 @@ export function planRetry(
   return { retry: true, delayMs: honored ?? Math.round(backoff * (0.5 + rand() * 0.5)) };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Opt-in; callers that pass none behave as before. */
+export interface Limits {
+  /** Cuts the request in flight and the retries. */
+  signal?: AbortSignal;
+  /** Cuts a request that has not answered in this long; a retry may follow. */
+  requestTimeoutMs?: number;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function post(
@@ -56,13 +74,19 @@ async function post(
   body: string,
   log?: Log,
   read = false,
+  limits?: Limits,
 ): Promise<Attempt> {
+  const cancel = limits ? new AbortController() : undefined;
+  const abort = (): void => cancel?.abort();
+  const timer = limits?.requestTimeoutMs ? setTimeout(abort, limits.requestTimeoutMs) : undefined;
+  limits?.signal?.addEventListener('abort', abort, { once: true });
   try {
     const response = await fetch(url, {
       method: 'POST',
       keepalive: true,
       headers: { 'Content-Type': JSON_TYPE, 'X-Argos-Key': publicKey },
       body,
+      ...(cancel && { signal: cancel.signal }),
     });
     if (log) {
       const { status } = response;
@@ -74,6 +98,9 @@ async function post(
   } catch {
     log?.('ingest unreachable');
     return { status: null, retryAfter: null };
+  } finally {
+    clearTimeout(timer);
+    limits?.signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -93,8 +120,9 @@ export async function deliverForAnswer(
   publicKey: string,
   body: string,
   log?: Log,
+  limits?: Limits,
 ): Promise<unknown> {
-  return send(url, publicKey, body, log, true);
+  return send(url, publicKey, body, log, true, limits);
 }
 
 async function send(
@@ -103,14 +131,16 @@ async function send(
   body: string,
   log: Log | undefined,
   read: boolean,
+  limits?: Limits,
 ): Promise<unknown> {
   for (let attempt = 0; ; attempt++) {
-    const result = await post(url, publicKey, body, log, read);
+    if (limits?.signal?.aborted) return false;
+    const result = await post(url, publicKey, body, log, read, limits);
     if (result.status !== null && result.status < 400) return result.answer ?? null;
     const plan = planRetry(result, attempt);
-    if (!plan.retry) return false;
+    if (!plan.retry || limits?.signal?.aborted) return false;
     log?.(`retry ${String(attempt + 1)} in ${String(plan.delayMs)}ms`);
-    await sleep(plan.delayMs);
+    await sleep(plan.delayMs, limits?.signal);
   }
 }
 

@@ -115,6 +115,7 @@ describe('the request', () => {
     expect(url).toBe(URL_);
     expect(init.method).toBe('POST');
     expect(init.keepalive).toBe(true);
+    expect(init).not.toHaveProperty('signal');
     expect(init.headers).toMatchObject({
       'Content-Type': 'application/json',
       'X-Argos-Key': 'a'.repeat(32),

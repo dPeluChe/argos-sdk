@@ -23,6 +23,7 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5
 // The once-per-period guard is module state, so each test gets fresh modules.
 const browser = () => import('../src/index.js');
 const server = () => import('../src/server/index.js');
+const agentsHalf = () => import('../src/agents/index.js');
 
 beforeEach(() => {
   vi.resetModules();
@@ -90,6 +91,52 @@ describe('server heartbeat', () => {
     await vi.runAllTimersAsync();
 
     expect(info).toHaveBeenCalledWith('[argos] heartbeat failed');
+  });
+});
+
+describe('agents heartbeat', () => {
+  it('lets an agents-only process show up as a component', async () => {
+    const { initAgents } = await agentsHalf();
+    initAgents({ dsn: DSN, release: 'worker@3.0.0', environment: 'staging' });
+    initAgents({ dsn: DSN });
+    await tick();
+
+    expect(beats()).toHaveLength(1);
+    expect(beats()[0].url).toBe(URL);
+    expect(new Headers(beats()[0].init.headers).get('X-Argos-Key')).toBe(
+      '0123456789abcdef0123456789abcdef',
+    );
+    expect(beats()[0].body).toEqual({
+      environment: 'staging',
+      release: 'worker@3.0.0',
+      runtime: 'node',
+      sdk: { name: '@argos/browser/agents', version },
+      sentry: null,
+    });
+  });
+
+  it('is independent of the server half in the same process', async () => {
+    const { initServer } = await server();
+    const { initAgents } = await agentsHalf();
+    initServer({ dsn: DSN });
+    initAgents({ dsn: DSN });
+    await tick();
+
+    expect(beats().map((beat) => (beat.body.sdk as { name: string }).name)).toEqual([
+      '@argos/browser/server',
+      '@argos/browser/agents',
+    ]);
+  });
+
+  it('sends nothing with heartbeat: false or a bad DSN', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { initAgents } = await agentsHalf();
+    initAgents({ dsn: DSN, heartbeat: false });
+    initAgents({ dsn: 'not a dsn' });
+    await tick();
+
+    expect(beats()).toHaveLength(0);
+    expect(error).toHaveBeenCalled();
   });
 });
 

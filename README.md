@@ -98,7 +98,7 @@ it waits for `grantConsent()`, and after a refusal it is never sent.
 ## Startup heartbeat
 
 An install that only reports errors cannot prove it is live: no news is not
-evidence. So `init` and `initServer` each send one small heartbeat to
+evidence. So `init`, `initServer` and `initAgents` each send one small heartbeat to
 `POST /api/{project}/heartbeat/`, and the workspace's `/check` lists what has
 checked in under `components` (contract:
 [`../docs/INGEST_API.md`](../docs/INGEST_API.md)).
@@ -128,6 +128,8 @@ page or process (read off its global, never imported), or `null`.
   and only once consent allows sending. `runtime` is `browser`.
 - **Server:** once per process, right after `initServer`. `runtime` is `node`,
   `sdk.name` is `@argos/browser/server`.
+- **Agents:** once per process, right after `initAgents`. `runtime` is `node`,
+  `sdk.name` is `@argos/browser/agents`.
 
 It is fire and forget: a failure never throws, and with `debug: true` it logs
 `heartbeat delivered` or `heartbeat failed`. `heartbeat: false` turns it off.
@@ -260,7 +262,7 @@ why there was none), each flush's result and the startup heartbeat's.
 
 For Node 20+ (global `fetch`), and nothing in it reaches the browser bundle. It
 sends an agent run as an OTLP trace: **one trace per turn**, a span for the turn,
-one per model call and one per tool call. Anything that already speaks OTLP can
+one per model call, one per tool call and one per step. Anything that already speaks OTLP can
 point at the same endpoint instead; this is the zero-dependency way to do it.
 
 ```ts
@@ -308,6 +310,15 @@ pressed stop' })` stores `argos.run.cancel_reason` on the turn, cut at 256
 - **The turn's own input and output.** `turn.end({ input, output })` puts them on
   the turn's span as `gen_ai.input.messages` / `gen_ai.output.messages`, with the
   same 8,192-character cap and the same `captureContent` gate as model content.
+- **Steps: the work that is neither a model nor a tool.** `turn.step({ name:
+'human_approval' })` (also `retrieval`, `subagent`, anything) opens a span with
+  `gen_ai.operation.name` = `step` and `argos.step.name`. It takes `attributes`
+  and `end({ input, output, error })` (content under the usual gate), and
+  `step.run(async (step) => ...)` fails it on a throw. Steps nest: a step has its
+  own `model()`, `tool()` and `step()`, and each child's parent is that step. A
+  child still open when its step ends keeps running until it ends or the turn does.
+  The server stores a step like any other agent span and counts it in the run's
+  `steps`.
 - **Tool content without `end()`.** `tool.run(fn, { arguments, resultOf })`
   records the arguments, and `resultOf(result)` picks what of the result to
   record (like `usageOf` for a model). Without `resultOf` no result is sent; the
@@ -329,13 +340,32 @@ pressed stop' })` stores `argos.run.cancel_reason` on the turn, cut at 256
   drop it on its side (`ARGOS_AGENT_DROP_CONTENT=true` in argos-workers; the
   default keeps it).
 - **It never throws into the agent.** A bad DSN logs once and turns the module
-  into a no-op; a failed send is retried like events and then given up on.
-  `flush()` resolves `true` when everything was delivered. Spans leave when a
-  turn ends, in batches, at the latest after five seconds (that timer does not
-  keep the process alive, so call `flush()` before exiting). The queue holds
-  1,000 spans and drops the oldest past that (`agents.dropped`).
+  into a no-op; a failed send is retried like events and then given up on, and
+  each request is cut after 10 seconds without an answer, so a dead connection
+  cannot hold a process open. `flush()` resolves `true` when everything was
+  delivered. Spans leave when a turn ends, in batches, at the latest after five
+  seconds (that timer does not keep the process alive, so call `flush()` before
+  exiting). The queue holds 1,000 spans and drops the oldest past that
+  (`agents.dropped`).
+- **A bounded flush.** `await agents.flush({ timeoutMs: 3000 })` waits at most that
+  long (it also covers a flush already on the wire) and resolves `false` when the
+  time is up. The spans it had not delivered go back to the front of the queue
+  for the next `flush()` or the five-second timer, so nothing is lost silently.
+  A request cut mid-flight may still have reached the server, so a resent span can
+  arrive twice: the stored span is the same row, but the run's `steps` counter
+  can count it again. A flush that fails for good (bad key, retries used up) is
+  not requeued: those spans are given up on, as before.
+- **Spans without `gen_ai.*` are dropped by the server.** Every span this SDK
+  emits carries one, so none of yours is lost that way; a span you add through
+  another OTLP exporter into the same trace without one is not stored, and the
+  server says so in the `partialSuccess` answer (`rejectedSpans`), which
+  `debug: true` logs. Do not rely on that for spans of this SDK.
 - **Spans the server rejects are logged** with `debug: true`, from the OTLP
   partial-success answer.
+- **Heartbeat.** `initAgents` sends the same startup heartbeat as the server
+  half (once per process, `sdk.name` `@argos/browser/agents`, `runtime` `node`), so
+  a component that only runs agents shows as installed in `/check`.
+  `heartbeat: false` turns it off; see [Startup heartbeat](#startup-heartbeat).
 
 The wire contract is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#agent-telemetry-over-otlp).
 
