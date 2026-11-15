@@ -2,9 +2,9 @@
 
 Product event and correlation SDK for [Argos](../docs/ARGOS_SPEC.md).
 
-This repo holds one package, `@argos/browser`, with three entry points: the
-browser half (`@argos/browser`), the Node half (`@argos/browser/server`) and
-the `argos-sourcemaps` CLI. There is no Python SDK: Python services report
+This repo holds one package, `@argos/browser`, with four entry points: the
+browser half (`@argos/browser`), the Node half (`@argos/browser/server`), agent
+telemetry for Node (`@argos/browser/agents`) and the `argos-sourcemaps` CLI. There is no Python SDK: Python services report
 errors through `sentry-sdk` (see [Recipe: python](#recipe-python)), and
 the same goes for Go and Rust. The wire
 format the SDK speaks is [`../docs/INGEST_API.md`](../docs/INGEST_API.md);
@@ -255,6 +255,65 @@ export async function POST(request: Request) {
 
 `initServer` takes `debug: true` too, and then logs each request's visit (or
 why there was none), each flush's result and the startup heartbeat's.
+
+### Agents half: `@argos/browser/agents`
+
+For Node 20+ (global `fetch`), and nothing in it reaches the browser bundle. It
+sends an agent run as an OTLP trace: **one trace per turn**, a span for the turn,
+one per model call and one per tool call. Anything that already speaks OTLP can
+point at the same endpoint instead; this is the zero-dependency way to do it.
+
+```ts
+import { initAgents, spineFrom } from '@argos/browser/agents';
+
+const agents = initAgents({ dsn: process.env.ARGOS_DSN, serviceName: 'tasky-worker' });
+
+app.post('/chat', async (req, res) => {
+  const spine = spineFrom(req.headers); // the visit that sent this request, if any
+  const turn = agents.turn({ agent: 'tasky', userId: req.user.id, ...(spine && { spine }) });
+
+  await turn.run(async () => {
+    const answer = await turn.model({ provider: 'anthropic', model: 'claude-sonnet-4-5' }).run(
+      () => callModel(),
+      (r) => ({
+        inputTokens: r.usage.input,
+        outputTokens: r.usage.output,
+        cachedInputTokens: r.usage.cacheRead,
+      }),
+    );
+    await turn.tool({ name: 'create_task' }).run(() => createTask(answer));
+  });
+  await agents.flush(); // before the response in a serverless handler, or before exit
+  res.end();
+});
+```
+
+Without `run`, call `.end()` yourself: `call.end({ inputTokens, outputTokens })`,
+`tool.end({ error })`, `turn.end({ outcome: 'completed' | 'failed' | 'cancelled' })`.
+
+- **Cached and reasoning tokens are subsets.** `cachedInputTokens` and
+  `cacheWriteTokens` are already inside `inputTokens`, `reasoningOutputTokens`
+  is already inside `outputTokens`. Pass the provider's totals as they are and
+  never add the parts to them. `costUsd` is optional: send it only when the
+  provider or gateway reported one, otherwise the server prices the call.
+- **Cancelled is not failed.** An `AbortError`, or an abort of the `signal` given
+  to `turn()`, ends the turn as `cancelled` and records no error. A timeout
+  (`AbortSignal.timeout`) stays a failure.
+- **No content by default.** Prompts, completions, tool arguments and results
+  never leave the host. Set `captureContent: true` and pass `input` / `output`
+  to `call.end()` or `arguments` / `result` to `tool.end()` to send them, as
+  JSON capped at 8,192 characters each. The Argos server drops them unless its
+  own capture switch is on as well.
+- **It never throws into the agent.** A bad DSN logs once and turns the module
+  into a no-op; a failed send is retried like events and then given up on.
+  `flush()` resolves `true` when everything was delivered. Spans leave when a
+  turn ends, in batches, at the latest after five seconds (that timer does not
+  keep the process alive, so call `flush()` before exiting). The queue holds
+  1,000 spans and drops the oldest past that (`agents.dropped`).
+- **Spans the server rejects are logged** with `debug: true`, from the OTLP
+  partial-success answer.
+
+The wire contract is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#agent-telemetry-over-otlp).
 
 ### init options
 

@@ -54,7 +54,10 @@ for (const { entry, maxRawBytes, maxGzipBytes } of BUDGETS) {
   const files = [...graph(entry)];
   const raw = files.reduce((total, file) => total + statSync(file).size, 0);
   const gzip = files.reduce((total, file) => total + gzipSync(readFileSync(file)).length, 0);
-  const over = raw > maxRawBytes || gzip > maxGzipBytes;
+  // The agents entry is Node-only: a browser bundle that pulls its code in is a bug.
+  const leaked = files.some((file) => readFileSync(file, 'utf8').includes('invoke_agent'));
+  if (leaked) console.error(`${entry} pulls in the @argos/browser/agents code`);
+  const over = leaked || raw > maxRawBytes || gzip > maxGzipBytes;
   failed ||= over;
 
   const pct = Math.round((gzip / maxGzipBytes) * 100);
