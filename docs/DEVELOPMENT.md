@@ -397,9 +397,11 @@ SDK promises it.
 - **Resource**: `service.name`, `service.version` (release),
   `deployment.environment.name`, `telemetry.sdk.{name,version,language}`.
 - **Content** (`gen_ai.input.messages`, `gen_ai.output.messages`,
-  `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`) is only set when
-  `captureContent` is on and the caller passes it, as JSON capped at 8,192
-  characters per attribute. The server drops it by default as well.
+  `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`) is set whenever the
+  caller passes it, as JSON capped at 8,192 characters per attribute; the SDK
+  never invents content. `captureContent: false` strips it before anything
+  leaves the process. The server can drop it too
+  (`ARGOS_AGENT_DROP_CONTENT=true` in argos-workers; the default keeps it).
 - **Failure** never reaches the agent. A bad DSN leaves an inert instance. The
   queue is 1,000 spans, oldest dropped; batches are 100 spans. A 2xx answer with
   `partialSuccess.rejectedSpans` is logged under `debug` and still counts as

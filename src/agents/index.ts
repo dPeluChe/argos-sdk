@@ -39,10 +39,10 @@ export interface AgentsOptions extends Pick<
   /** `service.name` of the process; defaults to `argos-agents`. */
   serviceName?: string;
   /**
-   * Send the content a caller hands to `end()` (messages, tool arguments and
-   * results). Off by default: nothing a person typed or a tool returned leaves
-   * the host unless this is `true`, and the Argos server drops it unless its
-   * own capture switch is on too.
+   * Content the caller hands to `end()` (messages, tool arguments and results)
+   * is sent by default; the SDK never invents any. `false` strips it before
+   * anything leaves the process. The Argos server can also drop it
+   * (`ARGOS_AGENT_DROP_CONTENT=true`).
    */
   captureContent?: boolean;
 }
@@ -82,7 +82,7 @@ export interface ModelEnd {
   /** Cost the provider or gateway reported, in USD. Omit it and the server prices the call. */
   costUsd?: number;
   responseModel?: string;
-  /** Sent only with `captureContent: true`. */
+  /** Stripped when `captureContent` is `false`. */
   input?: unknown;
   output?: unknown;
   error?: unknown;
@@ -93,7 +93,7 @@ export interface ToolOptions {
 }
 
 export interface ToolEnd {
-  /** Sent only with `captureContent: true`. */
+  /** Stripped when `captureContent` is `false`. */
   arguments?: unknown;
   result?: unknown;
   error?: unknown;
@@ -168,7 +168,7 @@ export class Agents {
 
   constructor(options: AgentsOptions) {
     this.log = logger(options.debug);
-    this.captureContent = options.captureContent === true;
+    this.captureContent = options.captureContent !== false;
     try {
       this.endpoint = resolveEndpoint(options);
       this.log?.(`agents ${this.endpoint.baseUrl} project ${this.endpoint.projectId}`);

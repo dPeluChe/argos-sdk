@@ -299,11 +299,13 @@ Without `run`, call `.end()` yourself: `call.end({ inputTokens, outputTokens })`
 - **Cancelled is not failed.** An `AbortError`, or an abort of the `signal` given
   to `turn()`, ends the turn as `cancelled` and records no error. A timeout
   (`AbortSignal.timeout`) stays a failure.
-- **No content by default.** Prompts, completions, tool arguments and results
-  never leave the host. Set `captureContent: true` and pass `input` / `output`
-  to `call.end()` or `arguments` / `result` to `tool.end()` to send them, as
-  JSON capped at 8,192 characters each. The Argos server drops them unless its
-  own capture switch is on as well.
+- **Content is sent when you pass it.** `input` / `output` given to
+  `call.end()` and `arguments` / `result` given to `tool.end()` go out as JSON
+  capped at 8,192 characters each; the SDK never invents content, it only
+  forwards what you hand it. Set `captureContent: false` in the options to
+  strip it all before anything leaves the process. The Argos server can also
+  drop it on its side (`ARGOS_AGENT_DROP_CONTENT=true` in argos-workers; the
+  default keeps it).
 - **It never throws into the agent.** A bad DSN logs once and turns the module
   into a no-op; a failed send is retried like events and then given up on.
   `flush()` resolves `true` when everything was delivered. Spans leave when a
