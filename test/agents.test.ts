@@ -421,6 +421,244 @@ describe('content', () => {
   });
 });
 
+describe('custom attributes', () => {
+  it('carries them on the span they were given to, typed for the wire', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky', attributes: { 'tasky.run_id': 'r_1', trigger: 'cron' } });
+    turn.model({ provider: 'p', model: 'm', attributes: { attempt: 2, ratio: 0.5, cached: true } });
+    turn.tool({ name: 't', attributes: { 'tasky.board': 'b_9' } }).end();
+    turn.end();
+    await a.flush();
+
+    expect(named('invoke_agent').attributes).toEqual(
+      expect.arrayContaining([
+        { key: 'tasky.run_id', value: { stringValue: 'r_1' } },
+        { key: 'trigger', value: { stringValue: 'cron' } },
+      ]),
+    );
+    expect(named('chat').attributes).toEqual(
+      expect.arrayContaining([
+        { key: 'attempt', value: { intValue: '2' } },
+        { key: 'ratio', value: { doubleValue: 0.5 } },
+        { key: 'cached', value: { boolValue: true } },
+      ]),
+    );
+    expect(attrs(named('execute_tool').attributes)).toMatchObject({ 'tasky.board': 'b_9' });
+    expect(attrs(named('execute_tool').attributes)).not.toHaveProperty('tasky.run_id');
+  });
+
+  it('never lets them override what the SDK owns, and says so under debug', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const a = agents({ debug: true });
+    const turn = a.turn({
+      agent: 'tasky',
+      sessionId: SESSION,
+      attributes: {
+        'gen_ai.operation.name': 'hijack',
+        'gen_ai.usage.input_tokens': 999,
+        'argos.session_id': 'forged',
+        'argos.run.outcome': 'completed',
+        'argos.custom': 'x',
+        'error.type': 'forged',
+        kept: 'yes',
+      },
+    });
+    turn.end({ outcome: 'cancelled' });
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)).toMatchObject({
+      'gen_ai.operation.name': 'invoke_agent',
+      'argos.session_id': SESSION,
+      'argos.run.outcome': 'cancelled',
+      kept: 'yes',
+    });
+    const sent = attrs(named('invoke_agent').attributes);
+    for (const key of ['gen_ai.usage.input_tokens', 'argos.custom', 'error.type']) {
+      expect(sent).not.toHaveProperty(key);
+    }
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('"argos.custom" dropped: reserved'));
+  });
+
+  it('caps the count and the lengths, and drops values it cannot encode', async () => {
+    const a = agents();
+    const many: Record<string, string | number | boolean> = {};
+    for (let i = 0; i < 40; i++) many[`k${String(i)}`] = i;
+    const turn = a.turn({ agent: 'tasky', attributes: many });
+    turn.tool({
+      name: 't',
+      attributes: {
+        long: 'x'.repeat(2_000),
+        ['y'.repeat(129)]: 'long key',
+        nan: Number.NaN,
+        inf: Number.POSITIVE_INFINITY,
+        nested: {} as unknown as string,
+        ok: 'fine',
+      },
+    });
+    turn.end();
+    await a.flush();
+
+    const root = attrs(named('invoke_agent').attributes);
+    expect(Object.keys(root).filter((k) => /^k\d+$/.test(k))).toHaveLength(32);
+    const tool = attrs(named('execute_tool').attributes);
+    expect(String(tool['long'])).toHaveLength(512);
+    expect(tool).toMatchObject({ ok: 'fine' });
+    for (const key of ['nan', 'inf', 'nested', 'y'.repeat(129)])
+      expect(tool).not.toHaveProperty(key);
+  });
+
+  it('keeps a hostile attributes value from breaking the turn', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky', attributes: 'nope' as unknown as never });
+    turn.end();
+    await a.flush();
+
+    expect(spansOf()).toHaveLength(1);
+  });
+});
+
+describe('cancel reason and turn content', () => {
+  it('records why a turn was cancelled, cut at 256 characters', async () => {
+    const a = agents();
+    a.turn({ agent: 'one' }).end({ outcome: 'cancelled', reason: 'user pressed stop' });
+    a.turn({ agent: 'two' }).end({ outcome: 'cancelled', reason: 'r'.repeat(400) });
+    a.turn({ agent: 'three' }).end({ outcome: 'cancelled' });
+    await a.flush();
+
+    expect(attrs(named('invoke_agent one').attributes)['argos.run.cancel_reason']).toBe(
+      'user pressed stop',
+    );
+    expect(attrs(named('invoke_agent two').attributes)['argos.run.cancel_reason']).toHaveLength(
+      256,
+    );
+    expect(attrs(named('invoke_agent three').attributes)).not.toHaveProperty(
+      'argos.run.cancel_reason',
+    );
+  });
+
+  it('ignores a reason on a turn that was not cancelled', async () => {
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end({ reason: 'stray' });
+    await a.flush();
+
+    expect(attrs(named('invoke_agent').attributes)).not.toHaveProperty('argos.run.cancel_reason');
+  });
+
+  it('puts the turn input and output on the root, capped and gated like the rest', async () => {
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end({ input: 'make a task', output: { id: 7 } });
+    a.turn({ agent: 'big' }).end({ input: 'x'.repeat(50_000) });
+    await a.flush();
+
+    expect(attrs(named('invoke_agent tasky').attributes)).toMatchObject({
+      'gen_ai.input.messages': '"make a task"',
+      'gen_ai.output.messages': '{"id":7}',
+    });
+    expect(
+      String(attrs(named('invoke_agent big').attributes)['gen_ai.input.messages']),
+    ).toHaveLength(8192);
+  });
+
+  it('strips the turn content when captureContent is false', async () => {
+    const a = agents({ captureContent: false });
+    a.turn({ agent: 'tasky' }).end({ input: 'secret in', output: 'secret out' });
+    await a.flush();
+
+    expect(JSON.stringify(calls[0]?.body)).not.toContain('secret');
+  });
+});
+
+describe('inherited provider and model', () => {
+  it('uses the turn defaults and lets a call override them', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky', provider: 'anthropic', model: 'claude-x' });
+    turn.model().end();
+    turn.model({ model: 'claude-y' }).end();
+    turn.model({ provider: 'openai', model: 'gpt-z', operation: 'embeddings' }).end();
+    turn.end();
+    await a.flush();
+
+    expect(attrs(named('chat claude-x').attributes)).toMatchObject({
+      'gen_ai.provider.name': 'anthropic',
+      'gen_ai.request.model': 'claude-x',
+    });
+    expect(attrs(named('chat claude-y').attributes)).toMatchObject({
+      'gen_ai.provider.name': 'anthropic',
+      'gen_ai.request.model': 'claude-y',
+    });
+    expect(attrs(named('embeddings gpt-z').attributes)).toMatchObject({
+      'gen_ai.provider.name': 'openai',
+    });
+  });
+
+  it('still emits a span with an operation when nothing names a model', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.model().end();
+    turn.end();
+    await a.flush();
+
+    expect(named('chat').name).toBe('chat');
+    expect(attrs(named('chat').attributes)).not.toHaveProperty('gen_ai.request.model');
+    expect(attrs(named('chat').attributes)['gen_ai.operation.name']).toBe('chat');
+  });
+});
+
+describe('tool content from run()', () => {
+  it('records the arguments and the mapped result without a manual end()', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    const result = await turn.tool({ name: 'create_task' }).run(() => ({ id: 7, big: 'x' }), {
+      arguments: { title: 'ship' },
+      resultOf: (r) => ({ id: r.id }),
+    });
+    turn.end();
+    await a.flush();
+
+    expect(result).toEqual({ id: 7, big: 'x' });
+    expect(attrs(named('execute_tool').attributes)).toMatchObject({
+      'gen_ai.tool.call.arguments': '{"title":"ship"}',
+      'gen_ai.tool.call.result': '{"id":7}',
+    });
+  });
+
+  it('sends no result unless resultOf names one, and keeps the arguments on a failure', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    await turn.tool({ name: 'ok' }).run(() => 'raw', { arguments: { q: 1 } });
+    await turn
+      .tool({ name: 'bad' })
+      .run(() => Promise.reject(new Error('nope')), { arguments: { q: 2 } })
+      .catch(() => undefined);
+    turn.end();
+    await a.flush();
+
+    expect(attrs(named('execute_tool ok').attributes)).not.toHaveProperty(
+      'gen_ai.tool.call.result',
+    );
+    expect(attrs(named('execute_tool bad').attributes)).toMatchObject({
+      'gen_ai.tool.call.arguments': '{"q":2}',
+    });
+    expect(named('execute_tool bad').status.code).toBe(2);
+  });
+
+  it('keeps a throwing resultOf from costing the caller its result, and honors captureContent', async () => {
+    const a = agents({ captureContent: false });
+    const turn = a.turn({ agent: 'tasky' });
+    const got = await turn.tool({ name: 't' }).run(() => 'reply', {
+      arguments: 'secret',
+      resultOf: () => {
+        throw new Error('bad mapper');
+      },
+    });
+    turn.end();
+    await a.flush();
+
+    expect(got).toBe('reply');
+    expect(JSON.stringify(calls[0]?.body)).not.toContain('secret');
+  });
+});
+
 describe('correlation', () => {
   it('joins the visit it was started from, without borrowing its trace', async () => {
     const a = agents();
