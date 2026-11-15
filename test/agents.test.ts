@@ -372,16 +372,16 @@ describe('content', () => {
     return JSON.stringify(calls[0]?.body);
   }
 
-  it('is never sent by default, even when the caller hands it over', async () => {
-    const body = await run({});
+  it('is stripped before it leaves when captureContent is false', async () => {
+    const body = await run({ captureContent: false });
 
     expect(body).not.toContain('secret');
     expect(body).not.toContain('gen_ai.input.messages');
     expect(body).not.toContain('gen_ai.tool.call');
   });
 
-  it('is sent as JSON strings when captureContent is on', async () => {
-    await run({ captureContent: true });
+  it('is sent as JSON strings by default', async () => {
+    await run({});
 
     expect(attrs(named('chat').attributes)).toMatchObject({
       'gen_ai.input.messages': JSON.stringify(content.input),
@@ -393,8 +393,21 @@ describe('content', () => {
     });
   });
 
+  it('sends nothing the caller did not pass', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.model({ provider: 'p', model: 'm' }).end({ inputTokens: 1 });
+    turn.tool({ name: 't' }).end();
+    turn.end();
+    await a.flush();
+
+    const body = JSON.stringify(calls[0]?.body);
+    expect(body).not.toContain('gen_ai.input.messages');
+    expect(body).not.toContain('gen_ai.tool.call');
+  });
+
   it('truncates what it sends and survives content that cannot be serialized', async () => {
-    const a = agents({ captureContent: true });
+    const a = agents();
     const turn = a.turn({ agent: 'tasky' });
     const circular: Record<string, unknown> = {};
     circular['self'] = circular;
