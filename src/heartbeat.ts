@@ -46,7 +46,8 @@ export function detectSentry(): SdkInfo | null {
   }
 }
 
-let sent: string | undefined;
+// Per SDK name: the server and agents halves of one process are separate components.
+const sent = new Map<string, string>();
 
 /** -1, 0 or 1; a pre-release tail is ignored. */
 export function compareVersions(left: string, right: string): number {
@@ -96,8 +97,8 @@ export function sendHeartbeat(
   log: Log | undefined,
 ): void {
   const debug = log !== undefined;
-  if (sent === period) return;
-  sent = period;
+  if (sent.get(sdkName) === period) return;
+  sent.set(sdkName, period);
   setTimeout(() => {
     const body: HeartbeatPayload = {
       ...payload,

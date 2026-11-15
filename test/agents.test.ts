@@ -42,7 +42,13 @@ function named(prefix: string, call = 0): Span {
   return span;
 }
 function agents(extra: Partial<AgentsOptions> = {}) {
-  return initAgents({ dsn: DSN, environment: 'staging', release: '1.4.0', ...extra });
+  return initAgents({
+    dsn: DSN,
+    environment: 'staging',
+    release: '1.4.0',
+    heartbeat: false,
+    ...extra,
+  });
 }
 
 beforeEach(() => {
@@ -656,6 +662,196 @@ describe('tool content from run()', () => {
 
     expect(got).toBe('reply');
     expect(JSON.stringify(calls[0]?.body)).not.toContain('secret');
+  });
+});
+
+describe('steps', () => {
+  it('emits a step with gen_ai.operation.name, the step name and the turn as parent', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.step({ name: 'human_approval', attributes: { channel: 'slack' } }).end({
+      input: 'delete 3 tasks?',
+      output: 'approved',
+    });
+    turn.end();
+    await a.flush();
+
+    const step = named('step human_approval');
+    expect(step.parentSpanId).toBe(named('invoke_agent').spanId);
+    expect(step.kind).toBe(1);
+    expect(attrs(step.attributes)).toMatchObject({
+      'gen_ai.operation.name': 'step',
+      'argos.step.name': 'human_approval',
+      channel: 'slack',
+      'gen_ai.input.messages': '"delete 3 tasks?"',
+      'gen_ai.output.messages': '"approved"',
+    });
+  });
+
+  it('nests: a step holds model, tool and step children with the right parents', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky', provider: 'anthropic', model: 'claude-x' });
+    await turn.step({ name: 'subagent' }).run(async (outer) => {
+      outer.model().end();
+      await outer.tool({ name: 'search' }).run(() => 'r');
+      await outer.step({ name: 'inner' }).run((inner) => {
+        inner.tool({ name: 'deep' }).end();
+      });
+    });
+    turn.tool({ name: 'top' }).end();
+    turn.end();
+    await a.flush();
+
+    const root = named('invoke_agent').spanId;
+    const outer = named('step subagent').spanId;
+    const inner = named('step inner').spanId;
+    expect(named('step subagent').parentSpanId).toBe(root);
+    expect(named('chat').parentSpanId).toBe(outer);
+    expect(named('execute_tool search').parentSpanId).toBe(outer);
+    expect(named('step inner').parentSpanId).toBe(outer);
+    expect(named('execute_tool deep').parentSpanId).toBe(inner);
+    expect(named('execute_tool top').parentSpanId).toBe(root);
+    expect(attrs(named('chat').attributes)['gen_ai.request.model']).toBe('claude-x');
+    expect(spansOf()).toHaveLength(7);
+    for (const span of spansOf()) {
+      expect(span.attributes.some(({ key }) => key.startsWith('gen_ai.'))).toBe(true);
+    }
+  });
+
+  it('fails a step that throws, leaves an abort cancelled, and rethrows untouched', async () => {
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    const boom = new Error('retrieval down');
+    await expect(
+      turn.step({ name: 'retrieval' }).run(() => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+    await turn
+      .step({ name: 'cut' })
+      .run(() => {
+        throw new DOMException('cut', 'AbortError');
+      })
+      .catch(() => undefined);
+    turn.end();
+    await a.flush();
+
+    expect(named('step retrieval').status).toEqual({ code: 2, message: 'retrieval down' });
+    expect(named('step cut').status.code).toBe(0);
+  });
+
+  it('closes a step left open with the turn, and strips its content like the rest', async () => {
+    const a = agents({ captureContent: false });
+    const turn = a.turn({ agent: 'tasky' });
+    const step = turn.step({ name: 'wait' });
+    turn.end();
+    step.end({ input: 'secret' });
+    await a.flush();
+
+    expect(spansOf()).toHaveLength(2);
+    expect(JSON.stringify(calls[0]?.body)).not.toContain('secret');
+  });
+});
+
+describe('bounded flush', () => {
+  // A fetch that never answers on its own, like a dead connection: only an abort ends it.
+  function hang(): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (url: string, init: RequestInit) =>
+          new Promise<Response>((_, reject) => {
+            calls.push({ url, init, body: JSON.parse(init.body as string) as Request });
+            init.signal?.addEventListener('abort', () => {
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          }),
+      ),
+    );
+  }
+
+  it('resolves false at the deadline and keeps the spans for the next flush', async () => {
+    hang();
+    const a = agents();
+    const turn = a.turn({ agent: 'tasky' });
+    turn.tool({ name: 't' }).end();
+    turn.end();
+
+    const bounded = a.flush({ timeoutMs: 2_000 });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await bounded).toBe(false);
+    expect(calls).toHaveLength(1);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: RequestInit) => {
+        calls.push({ url, init, body: JSON.parse(init.body as string) as Request });
+        return Promise.resolve(new Response('{}'));
+      }),
+    );
+    expect(await a.flush()).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(spansOf(1).map((span) => span.name)).toEqual(
+      expect.arrayContaining(['execute_tool t', 'invoke_agent tasky']),
+    );
+    expect(spansOf(1)).toHaveLength(2);
+  });
+
+  it('resolves true when delivery beats the deadline', async () => {
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end();
+
+    expect(await a.flush({ timeoutMs: 5_000 })).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('keeps the spans too when the deadline hits before the send even starts', async () => {
+    hang();
+    const a = agents();
+    a.turn({ agent: 'one' }).end();
+    const first = a.flush({ timeoutMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(0);
+    a.turn({ agent: 'two' }).end();
+    const second = a.flush({ timeoutMs: 500 });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(await first).toBe(false);
+    expect(await second).toBe(false);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: RequestInit) => {
+        calls.push({ url, init, body: JSON.parse(init.body as string) as Request });
+        return Promise.resolve(new Response('{}'));
+      }),
+    );
+    expect(await a.flush()).toBe(true);
+    const last = calls.length - 1;
+    expect(spansOf(last).map((span) => span.name)).toEqual([
+      'invoke_agent one',
+      'invoke_agent two',
+    ]);
+  });
+
+  it('aborts one request that never answers and retries it', async () => {
+    hang();
+    const a = agents();
+    a.turn({ agent: 'tasky' }).end();
+    const flushed = a.flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls).toHaveLength(1);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: RequestInit) => {
+        calls.push({ url, init, body: JSON.parse(init.body as string) as Request });
+        return Promise.resolve(new Response('{}'));
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(await flushed).toBe(true);
+    expect(calls).toHaveLength(2);
   });
 });
 

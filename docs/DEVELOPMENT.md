@@ -380,9 +380,23 @@ SDK promises it.
 - **Ids and times**: trace id 32 and span id 16 lowercase hex (the OTLP/JSON
   deviation from protojson, a silent trap on the server), times as unix
   nanosecond strings, int64 attributes as decimal strings.
-- **Spans**: `invoke_agent <agent>` (root), `chat <model>` and
-  `execute_tool <name>`. Every one carries `gen_ai.operation.name`, because the
-  server silently drops a span with no `gen_ai.*` attribute and says nothing.
+- **Spans**: `invoke_agent <agent>` (root), `chat <model>`,
+  `execute_tool <name>` and `step <name>`. Every one carries
+  `gen_ai.operation.name`, because the server drops a span with no `gen_ai.*`
+  attribute. It does say so: the answer is a 200 with
+  `partialSuccess.rejectedSpans` when the span shares a trace with a stored
+  agent step (a span of a trace with none is skipped quietly), and the SDK logs
+  that under `debug`. A test cannot produce that case through the SDK, since
+  every span it builds has the attribute; `test/agents.test.ts` asserts the
+  attribute on all of them and the partial-success log separately.
+- **Steps** (`turn.step()`, `step.step()`) are `KIND_INTERNAL` spans with
+  `gen_ai.operation.name` = `step` and `argos.step.name`. A model call, tool call
+  or step opened on a step has that step's span id as parent; the turn's trace id
+  and correlation attributes are on all of them. argos-workers keeps no logic on
+  the operation value: every span with `gen_ai.*` becomes an agent event and adds
+  1 to the run's `steps`, and `operation` of the run is the root's
+  (`invoke_agent`), a step only filling it if the root has not arrived yet. A step
+  sets no `gen_ai.agent.name`, so it cannot rename the run.
   Model calls add `gen_ai.provider.name`, `gen_ai.request.model`, optionally
   `gen_ai.response.model`, and the usage keys
   `gen_ai.usage.{input_tokens,output_tokens,cache_read.input_tokens,cache_creation.input_tokens,reasoning.output_tokens}`.
@@ -420,6 +434,20 @@ SDK promises it.
   throw in it loses the result attribute, never the caller's result. `captureContent: false` strips it before anything
   leaves the process. The server can drop it too
   (`ARGOS_AGENT_DROP_CONTENT=true` in argos-workers; the default keeps it).
+- **Heartbeat**: `initAgents` calls the same `sendHeartbeat` as the server half
+  with `sdk.name` `@argos/browser/agents`, once per process, `heartbeat: false`
+  to opt out. The once-per-period guard is keyed by SDK name, so the server and
+  agents halves of one process each report their own component.
+- **Delivery bounds**: every request carries a 10 s timeout (`Limits` in
+  `transport.ts`, opt-in per caller; the browser transport and the heartbeat pass
+  none and behave as before). A timed-out request is a network error to the retry
+  policy. `flush({ timeoutMs })` aborts the in-flight request and the backoff at
+  the deadline and resolves `false`; the unsent chunks are put back at the front
+  of the queue (the 1,000-span cap still applies) and the five-second timer is
+  armed. The sent-but-unanswered chunk is requeued too, so delivery is
+  at-least-once: the event row is idempotent on `(trace_id, span_id)` but the
+  worker's `steps` increment is not. A refusal for good (4xx, retries used up)
+  is not requeued.
 - **Failure** never reaches the agent. A bad DSN leaves an inert instance. The
   queue is 1,000 spans, oldest dropped; batches are 100 spans. A 2xx answer with
   `partialSuccess.rejectedSpans` is logged under `debug` and still counts as
