@@ -38,6 +38,7 @@ test/
   types/          compile-only Sentry 11 type test, run by npm run typecheck
 scripts/
   size-budget.mjs bundle byte budget, run by npm run size
+  release-notes.mjs release body with the tarball checksums, run by release-tarball.yml
 .github/workflows/
   ci.yml                  the gates below, on every PR
   release-tarball.yml     tarball upload on a v* tag
@@ -67,7 +68,11 @@ exit on its own (the flush timer is unref'd).
 
 Releases are cut by tag: a `v*` tag runs `release-tarball.yml`, which checks the
 tag equals `package.json`'s version and uploads the `npm pack` tarball to the
-GitHub release. The flow across repos is in
+GitHub release. The release body gets the tarball's `sha512-...` (the npm
+integrity string, base64) and sha256 in a block between
+`<!-- argos-sdk-checksums -->` markers; on a re-run, or when the release already
+exists, the block is replaced and the rest of the body is kept. The flow across
+repos is in
 [`../../docs/GUIDES/RELEASES.md`](../../docs/GUIDES/RELEASES.md).
 
 ## Rules for this repo
