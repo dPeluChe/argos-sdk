@@ -291,6 +291,28 @@ app.post('/chat', async (req, res) => {
 Without `run`, call `.end()` yourself: `call.end({ inputTokens, outputTokens })`,
 `tool.end({ error })`, `turn.end({ outcome: 'completed' | 'failed' | 'cancelled' })`.
 
+- **A model set once.** `provider` and `model` given to `turn()` are inherited by
+  `turn.model()`, which takes them again only to override (a second model in the
+  same turn, an `embeddings` call). With neither anywhere the span still goes out
+  with its operation and no model.
+- **Your own attributes.** `attributes: { 'tasky.run_id': id, trigger: 'cron' }`
+  on `turn()`, `turn.model()` and `turn.tool()` lands on that span only (a string,
+  number or boolean each). At most 32 per span, keys up to 128 characters, strings
+  cut at 512; the rest is dropped. Keys starting with `gen_ai.` or `argos.`, and
+  `error.type`, belong to the SDK: they are dropped, and `debug: true` logs each
+  one, so nothing can overwrite the outcome, the tokens or the session.
+- **Why a turn was cancelled.** `turn.end({ outcome: 'cancelled', reason: 'user
+pressed stop' })` stores `argos.run.cancel_reason` on the turn, cut at 256
+  characters. It is ignored for any other outcome, and it is not content:
+  `captureContent: false` does not strip it, so keep personal data out of it.
+- **The turn's own input and output.** `turn.end({ input, output })` puts them on
+  the turn's span as `gen_ai.input.messages` / `gen_ai.output.messages`, with the
+  same 8,192-character cap and the same `captureContent` gate as model content.
+- **Tool content without `end()`.** `tool.run(fn, { arguments, resultOf })`
+  records the arguments, and `resultOf(result)` picks what of the result to
+  record (like `usageOf` for a model). Without `resultOf` no result is sent; the
+  arguments are kept when the tool throws.
+
 - **Cached and reasoning tokens are subsets.** `cachedInputTokens` and
   `cacheWriteTokens` are already inside `inputTokens`, `reasoningOutputTokens`
   is already inside `outputTokens`. Pass the provider's totals as they are and

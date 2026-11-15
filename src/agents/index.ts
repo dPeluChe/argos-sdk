@@ -10,6 +10,7 @@ import {
   STATUS_ERROR,
   STATUS_OK,
   capped,
+  customAttrs,
   dbl,
   draft,
   encodeRequest,
@@ -28,9 +29,16 @@ const MAX_QUEUE = 1_000;
 const MAX_BATCH = 100;
 const FLUSH_DELAY_MS = 5_000;
 const CONTENT_CAP = 8_192;
-const ERROR_CAP = 256;
+const TEXT_CAP = 256;
 
 export type Outcome = 'completed' | 'failed' | 'cancelled';
+
+/**
+ * Your own span attributes (a run id, a trigger). At most 32 per span, keys up
+ * to 128 characters, strings cut at 512. Keys starting with `gen_ai.` or
+ * `argos.`, and `error.type`, belong to the SDK and are dropped (see `debug`).
+ */
+export type Attributes = Record<string, string | number | boolean>;
 
 export interface AgentsOptions extends Pick<
   InitOptions,
@@ -60,13 +68,18 @@ export interface TurnOptions {
   accountId?: string;
   /** An abort of this signal, or an `AbortError`, ends the turn as `cancelled`, not `failed`. */
   signal?: AbortSignal;
+  /** On the turn's own span only. */
+  attributes?: Attributes;
 }
 
 export interface ModelOptions {
-  provider: string;
-  model: string;
+  /** Defaults to the `provider` given to `turn()`. */
+  provider?: string;
+  /** Defaults to the `model` given to `turn()`. */
+  model?: string;
   /** Defaults to `chat`. */
   operation?: string;
+  attributes?: Attributes;
 }
 
 /** Cached and reasoning counts are subsets of input and output, never additions. */
@@ -90,6 +103,14 @@ export interface ModelEnd {
 
 export interface ToolOptions {
   name: string;
+  attributes?: Attributes;
+}
+
+export interface ToolRun<T> {
+  /** Stripped when `captureContent` is `false`. */
+  arguments?: unknown;
+  /** Reads the content to record off the result; without it no result is sent. */
+  resultOf?: (result: T) => unknown;
 }
 
 export interface ToolEnd {
@@ -103,6 +124,11 @@ export interface TurnEnd {
   /** Defaults to `failed` when `error` is given, `completed` otherwise. */
   outcome?: Outcome;
   error?: unknown;
+  /** Why a `cancelled` turn was cut, cut at 256 characters. Ignored for any other outcome. */
+  reason?: string;
+  /** The run's own input and output; stripped when `captureContent` is `false`. */
+  input?: unknown;
+  output?: unknown;
 }
 
 const USAGE = [
@@ -112,6 +138,13 @@ const USAGE = [
   ['cacheWriteTokens', 'gen_ai.usage.cache_creation.input_tokens'],
   ['reasoningOutputTokens', 'gen_ai.usage.reasoning.output_tokens'],
 ] as const;
+
+function identity(provider: string | undefined, model: string | undefined): Attrs {
+  const attrs: Attrs = {};
+  if (provider) attrs['gen_ai.provider.name'] = str(provider);
+  if (model) attrs['gen_ai.request.model'] = str(model);
+  return attrs;
+}
 
 const nameOf = (error: unknown): unknown =>
   typeof error === 'object' && error !== null && 'name' in error ? error.name : undefined;
@@ -128,7 +161,7 @@ function isCancel(error: unknown, signal: AbortSignal | undefined): boolean {
 function fail(span: Draft, error: unknown): void {
   const text =
     error instanceof Error ? error.message : typeof error === 'string' ? error : 'failed';
-  span.status = { code: STATUS_ERROR, message: text.slice(0, ERROR_CAP) };
+  span.status = { code: STATUS_ERROR, message: text.slice(0, TEXT_CAP) };
   span.attrs['error.type'] = str(error instanceof Error ? error.name : 'Error');
 }
 
@@ -210,6 +243,14 @@ export class Agents {
   }
 
   /** @internal */
+  custom(input: Attributes | undefined): Attrs {
+    if (!input) return {};
+    const dropped = (key: string, why: string): void =>
+      this.log?.(`attribute "${key}" dropped: ${why}`);
+    return this.attempt(() => customAttrs(input, dropped)) ?? {};
+  }
+
+  /** @internal */
   accept(spans: Draft[]): void {
     this.attempt(() => {
       if (!this.endpoint) return;
@@ -281,6 +322,7 @@ export class Turn {
   private readonly root: Draft;
   private readonly correlation: Attrs = {};
   private readonly spans: Draft[] = [];
+  private readonly defaults: Pick<TurnOptions, 'provider' | 'model'>;
   private done = false;
 
   constructor(
@@ -288,6 +330,7 @@ export class Turn {
     options: TurnOptions,
   ) {
     this.signal = options.signal;
+    this.defaults = { provider: options.provider, model: options.model };
     const found = options.spine && ('spine' in options.spine ? options.spine.spine : options.spine);
     const ids: Record<string, string | undefined> = {
       'argos.session_id': options.sessionId ?? found?.sessionId,
@@ -302,30 +345,38 @@ export class Turn {
       'gen_ai.operation.name': str('invoke_agent'),
       'gen_ai.agent.name': str(options.agent),
     };
-    if (options.model) attrs['gen_ai.request.model'] = str(options.model);
-    if (options.provider) attrs['gen_ai.provider.name'] = str(options.provider);
-    this.root = draft(this.traceId, `invoke_agent ${options.agent}`, KIND_INTERNAL, attrs);
+    this.root = draft(this.traceId, `invoke_agent ${options.agent}`, KIND_INTERNAL, {
+      ...this.agents.custom(options.attributes),
+      ...identity(options.provider, options.model),
+      ...attrs,
+    });
   }
 
-  model(options: ModelOptions): ModelCall {
+  model(options: ModelOptions = {}): ModelCall {
     const operation = options.operation ?? 'chat';
+    const provider = options.provider ?? this.defaults.provider;
+    const model = options.model ?? this.defaults.model;
+    const attrs: Attrs = { 'gen_ai.operation.name': str(operation), ...identity(provider, model) };
     return new ModelCall(
       this,
-      this.child(`${operation} ${options.model}`, KIND_CLIENT, {
-        'gen_ai.operation.name': str(operation),
-        'gen_ai.provider.name': str(options.provider),
-        'gen_ai.request.model': str(options.model),
-      }),
+      this.child(
+        model ? `${operation} ${model}` : operation,
+        KIND_CLIENT,
+        attrs,
+        options.attributes,
+      ),
     );
   }
 
   tool(options: ToolOptions): ToolCall {
     return new ToolCall(
       this,
-      this.child(`execute_tool ${options.name}`, KIND_INTERNAL, {
-        'gen_ai.operation.name': str('execute_tool'),
-        'gen_ai.tool.name': str(options.name),
-      }),
+      this.child(
+        `execute_tool ${options.name}`,
+        KIND_INTERNAL,
+        { 'gen_ai.operation.name': str('execute_tool'), 'gen_ai.tool.name': str(options.name) },
+        options.attributes,
+      ),
     );
   }
 
@@ -358,6 +409,11 @@ export class Turn {
       this.root.attrs['argos.run.outcome'] = str(outcome);
       if (outcome === 'failed') fail(this.root, end.error);
       else if (outcome === 'completed') this.root.status = { code: STATUS_OK };
+      else if (end.reason) {
+        this.root.attrs['argos.run.cancel_reason'] = str(end.reason.slice(0, TEXT_CAP));
+      }
+      this.content(this.root.attrs, 'gen_ai.input.messages', end.input);
+      this.content(this.root.attrs, 'gen_ai.output.messages', end.output);
     });
     this.agents.accept([this.root, ...this.spans]);
   }
@@ -378,18 +434,23 @@ export class Turn {
   }
 
   /** @internal */
+  get capturing(): boolean {
+    return this.agents.captureContent;
+  }
+
+  /** @internal */
   content(attrs: Attrs, key: string, value: unknown): void {
-    if (!this.agents.captureContent || value === undefined) return;
+    if (!this.capturing || value === undefined) return;
     const text = capped(value, CONTENT_CAP);
     if (text) attrs[key] = text;
   }
 
-  private child(name: string, kind: number, attrs: Attrs): Draft {
+  private child(name: string, kind: number, attrs: Attrs, custom?: Attributes): Draft {
     const span = draft(
       this.traceId,
       name,
       kind,
-      { ...this.correlation, ...attrs },
+      { ...this.agents.custom(custom), ...this.correlation, ...attrs },
       this.root.spanId,
     );
     this.spans.push(span);
@@ -447,15 +508,20 @@ export class ToolCall {
     });
   }
 
-  run<T>(fn: () => T | PromiseLike<T>): Promise<T> {
+  /** Runs `fn` as this call; `arguments` and `resultOf` record its content. A throw is rethrown untouched. */
+  run<T>(fn: () => T | PromiseLike<T>, options: ToolRun<T> = {}): Promise<T> {
     return observe(
       this.turn.signal,
       fn,
-      () => {
-        this.end();
+      (result) => {
+        // resultOf is caller code: a throw there must not cost the caller its result.
+        const recorded = this.turn.capturing
+          ? this.turn.attempt(() => options.resultOf?.(result))
+          : undefined;
+        this.end({ arguments: options.arguments, result: recorded });
       },
       (error, cancelled) => {
-        this.end(cancelled ? {} : { error });
+        this.end({ arguments: options.arguments, ...(cancelled ? {} : { error }) });
       },
     );
   }

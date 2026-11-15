@@ -389,6 +389,21 @@ SDK promises it.
   Cached, cache-write and reasoning counts are subsets and are passed through
   as given; `gen_ai.usage.cost` is a double in USD and only present when the
   caller supplied it.
+- **Cancel reason**: `turn.end({ outcome: 'cancelled', reason })` sets
+  `argos.run.cancel_reason` on the root, capped at 256 characters, and only for
+  that outcome. It is metadata, so `captureContent: false` leaves it alone.
+- **Custom attributes** (`attributes` on `turn()`, `model()`, `tool()`) go on the
+  one span they were given to, as string, bool, int (a safe integer) or double
+  (any other finite number) values. Per span: 32 entries (extra ones dropped,
+  in insertion order), keys up to 128 characters, strings cut at 512. A key that
+  starts with `gen_ai.` or `argos.`, or is `error.type`, is dropped and logged
+  under `debug`; they are applied before the SDK's own attributes, so even a
+  missed reservation could not win. The worker stores them in the span payload
+  and reads nothing from them.
+- **Inherited model**: `turn.model()` takes `provider` and `model` from `turn()`
+  unless given its own. A call with no model anywhere is named after its
+  operation alone and carries no `gen_ai.request.model`, but still
+  `gen_ai.operation.name`, so the server keeps it.
 - **Outcome** is `argos.run.outcome` on the root. Only `failed` sets status
   ERROR (code 2, message capped at 256 characters, plus `error.type`);
   `completed` is OK; `cancelled` stays UNSET, because a supervisor cut is not a
@@ -399,7 +414,10 @@ SDK promises it.
 - **Content** (`gen_ai.input.messages`, `gen_ai.output.messages`,
   `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`) is set whenever the
   caller passes it, as JSON capped at 8,192 characters per attribute; the SDK
-  never invents content. `captureContent: false` strips it before anything
+  never invents content. The root takes `input`/`output` from `turn.end()` under
+  the same two message keys, a model call from `end()`, and a tool from `end()`
+  or from `run(fn, { arguments, resultOf })`; `resultOf` is caller code and a
+  throw in it loses the result attribute, never the caller's result. `captureContent: false` strips it before anything
   leaves the process. The server can drop it too
   (`ARGOS_AGENT_DROP_CONTENT=true` in argos-workers; the default keeps it).
 - **Failure** never reaches the agent. A bad DSN leaves an inert instance. The

@@ -11,6 +11,46 @@ export const int = (n: number): Value => ({
   intValue: String(Number.isFinite(n) && n > 0 ? Math.floor(n) : 0),
 });
 
+const MAX_CUSTOM = 32;
+const MAX_KEY = 128;
+const MAX_TEXT = 512;
+
+/** `gen_ai.*` and `argos.*` are the SDK's namespaces; `error.type` is set when a span fails. */
+const reserved = (key: string): boolean =>
+  key.startsWith('gen_ai.') || key.startsWith('argos.') || key === 'error.type';
+
+function scalar(value: unknown): Value | undefined {
+  if (typeof value === 'string') return str(value.slice(0, MAX_TEXT));
+  if (typeof value === 'boolean') return { boolValue: value };
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Number.isSafeInteger(value) ? { intValue: String(value) } : { doubleValue: value };
+}
+
+/**
+ * The caller's own span attributes. Reserved keys, bad keys, values that are not
+ * a string, boolean or finite number, and entries past the 32nd are dropped;
+ * `onDrop` says why, for the debug log.
+ */
+export function customAttrs(input: unknown, onDrop: (key: string, why: string) => void): Attrs {
+  const out: Attrs = {};
+  if (typeof input !== 'object' || input === null) return out;
+  let kept = 0;
+  for (const [key, value] of Object.entries(input)) {
+    if (reserved(key)) onDrop(key, 'reserved key');
+    else if (key === '' || key.length > MAX_KEY) onDrop(key, 'bad key');
+    else if (kept >= MAX_CUSTOM) onDrop(key, 'over the 32 attribute cap');
+    else {
+      const typed = scalar(value);
+      if (!typed) onDrop(key, 'value is not a string, boolean or finite number');
+      else {
+        out[key] = typed;
+        kept++;
+      }
+    }
+  }
+  return out;
+}
+
 export const STATUS_UNSET = 0;
 export const STATUS_OK = 1;
 export const STATUS_ERROR = 2;
