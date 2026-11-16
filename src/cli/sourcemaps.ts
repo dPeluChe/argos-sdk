@@ -10,7 +10,8 @@ const SOURCE_EXTENSIONS = ['.js', '.mjs', '.cjs'];
 
 export const HELP = `Usage:
   argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --dsn <dsn>]
-                          [--token <t>] [--include-sources] [--dry-run] <dir> [<dir>...]
+                          [--component <slug>] [--token <t>] [--include-sources]
+                          [--dry-run] <dir> [<dir>...]
 
 Uploads every *.map under the given directories (node_modules skipped) to an
 Argos release, so minified stack frames resolve to your original code.
@@ -24,6 +25,10 @@ Options:
   --project <id>       Project id. Or give --dsn (env ARGOS_DSN) and it is read
                        from the DSN.
   --dsn <dsn>          The project's DSN, used only for its project id.
+  --component <slug>   The app the maps belong to (its slug in Argos). With a
+                       project-wide token the maps go to that app; with an
+                       app's token it must be that app. Omit to use the
+                       token's app, or the project level. Env: ARGOS_COMPONENT
   --token <t>          Upload token from the app page in Argos. Prefer the env
                        var ARGOS_UPLOAD_TOKEN: a flag shows in the process list.
   --include-sources    Also upload the .js/.mjs/.cjs file next to each map.
@@ -47,6 +52,7 @@ export interface Config {
   release: string;
   api: string;
   project: string;
+  component: string;
   token: string;
   includeSources: boolean;
   dryRun: boolean;
@@ -73,6 +79,7 @@ export function resolveConfig(argv: string[], env: Record<string, string | undef
         api: { type: 'string' },
         project: { type: 'string' },
         dsn: { type: 'string' },
+        component: { type: 'string' },
         token: { type: 'string' },
         'include-sources': { type: 'boolean', default: false },
         'dry-run': { type: 'boolean', default: false },
@@ -106,7 +113,18 @@ export function resolveConfig(argv: string[], env: Record<string, string | undef
   const token = values.token ?? env.ARGOS_UPLOAD_TOKEN ?? '';
   if (!token && !dryRun) throw new UsageError('--token (or ARGOS_UPLOAD_TOKEN) is required');
 
-  return { release, api, project, token, includeSources: values['include-sources'], dryRun, dirs };
+  const component = (values.component ?? env.ARGOS_COMPONENT ?? '').trim();
+
+  return {
+    release,
+    api,
+    project,
+    component,
+    token,
+    includeSources: values['include-sources'],
+    dryRun,
+    dirs,
+  };
 }
 
 async function* walk(dir: string): AsyncGenerator<string> {
@@ -167,6 +185,7 @@ export async function collect(dirs: string[], includeSources: boolean): Promise<
 
 export function uploadUrl(config: Config, file: UploadFile): string {
   const query = new URLSearchParams({ name: file.name, kind: file.kind });
+  if (config.component) query.set('component', config.component);
   return `${config.api}/api/projects/${encodeURIComponent(config.project)}/releases/${encodeURIComponent(config.release)}/files?${query.toString()}`;
 }
 
@@ -180,7 +199,8 @@ class Abort extends Error {}
 
 const FATAL: Record<number, string> = {
   401: 'the upload token was rejected (wrong, revoked, or for another installation)',
-  404: 'project not found: check --project / the DSN against --api',
+  403: 'the upload token is bound to another app than --component',
+  404: 'project or app not found: check --project / the DSN against --api, and --component',
 };
 
 type Outcome = 'uploaded' | 'skipped' | 'failed';
@@ -312,8 +332,9 @@ export async function run(
     for (const file of files) {
       safe.out(`would upload  ${file.name}  ${formatSize(file.size)}  ${file.kind}`);
     }
+    const app = config.component ? ` app ${config.component}` : '';
     safe.out(
-      `${String(files.length)} files for release ${config.release} to ${config.api} project ${config.project} (dry run)`,
+      `${String(files.length)} files for release ${config.release} to ${config.api} project ${config.project}${app} (dry run)`,
     );
     return 0;
   }
