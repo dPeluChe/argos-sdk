@@ -81,14 +81,22 @@ describe('resolveConfig', () => {
         '7',
         '--token',
         't',
+        '--component',
+        ' web ',
         'dist',
       ],
-      { ...BASE_ENV, ARGOS_RELEASE: 'env', ARGOS_DSN: 'https://k@x.test/9' },
+      {
+        ...BASE_ENV,
+        ARGOS_RELEASE: 'env',
+        ARGOS_DSN: 'https://k@x.test/9',
+        ARGOS_COMPONENT: 'admin',
+      },
     );
     expect(config).toMatchObject({
       release: 'r1',
       api: 'https://flag.test',
       project: '7',
+      component: 'web',
       token: 't',
       dirs: ['dist'],
     });
@@ -99,10 +107,12 @@ describe('resolveConfig', () => {
       ...BASE_ENV,
       ARGOS_RELEASE: 'web@1.2.3',
       ARGOS_DSN: 'https://pub@ingest.test/prefix/42',
+      ARGOS_COMPONENT: 'admin',
     });
     expect(config).toMatchObject({
       release: 'web@1.2.3',
       project: '42',
+      component: 'admin',
       token: TOKEN,
       dirs: ['a', 'b'],
     });
@@ -250,7 +260,24 @@ describe('run', () => {
     await put('dist/a.js.map');
     const h = harness(() => json(404));
     expect(await run(argv(), BASE_ENV, h.io)).toBe(1);
-    expect(h.lines.join('\n')).toMatch(/404: project not found/);
+    expect(h.lines.join('\n')).toMatch(/404: project or app not found/);
+  });
+
+  it('sends the app from --component, and none without it', async () => {
+    await put('dist/a.js.map');
+    const flag = harness();
+    expect(await run(argv('--component', 'web'), BASE_ENV, flag.io)).toBe(0);
+    expect(flag.calls[0].url.searchParams.get('component')).toBe('web');
+    const none = harness();
+    expect(await run(argv(), BASE_ENV, none.io)).toBe(0);
+    expect(none.calls[0].url.searchParams.has('component')).toBe(false);
+  });
+
+  it('aborts on 403 when the token is bound to another app', async () => {
+    await put('dist/a.js.map');
+    const h = harness(() => json(403));
+    expect(await run(argv('--component', 'web'), BASE_ENV, h.io)).toBe(1);
+    expect(h.lines.join('\n')).toMatch(/403: the upload token is bound to another app/);
   });
 
   it('does not retry a 413, and counts it failed', async () => {

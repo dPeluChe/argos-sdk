@@ -1261,12 +1261,13 @@ in CI as the secret `ARGOS_UPLOAD_TOKEN`.
 ```bash
 ARGOS_API_URL=https://argos.example.com \
 ARGOS_UPLOAD_TOKEN=${{ secrets.ARGOS_UPLOAD_TOKEN }} \
-npx argos-sourcemaps upload --release "web@$GIT_SHA" --dsn "$ARGOS_DSN" dist
+npx argos-sourcemaps upload --release "web@$GIT_SHA" --dsn "$ARGOS_DSN" --component web dist
 ```
 
 ```
 argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --dsn <dsn>]
-                        [--token <t>] [--include-sources] [--dry-run] <dir> [<dir>...]
+                        [--component <slug>] [--token <t>] [--include-sources]
+                        [--dry-run] <dir> [<dir>...]
 ```
 
 - **`--release` must equal the `release` passed to `Sentry.init` / the Argos
@@ -1274,6 +1275,12 @@ argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --ds
   mismatch means frames stay minified. Build both from the same variable.
 - `--api` (or `ARGOS_API_URL`) is required; there is no default host.
 - The project comes from `--project`, or from `--dsn` / `ARGOS_DSN`.
+- `--component` (or `ARGOS_COMPONENT`) is the slug of the app the maps belong
+  to. With a project-wide token the maps are stored for that app instead of
+  the whole project; with an app's own token it must name that app, or the
+  server answers 403. Without it, the maps go to the token's app, or to the
+  project level for a project-wide token. Needs an Argos server that knows the
+  `component` upload parameter; an older one ignores it.
 - Files are named by their path relative to each directory given, with
   forward slashes: `dist/assets/app.js.map` passed as `dist` becomes
   `assets/app.js.map`. `node_modules` is skipped.
@@ -1281,7 +1288,8 @@ argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --ds
   map, for maps built without `sourcesContent`.
 - `--dry-run` lists what would be sent and needs no token.
 - Uploads run four at a time, with one retry on a network error or 5xx.
-  A 401 (bad or revoked token) or 404 (wrong project) stops the run; files
+  A 401 (bad or revoked token), 403 (token of another app than `--component`)
+  or 404 (wrong project or unknown app) stops the run; files
   over 20 MiB are skipped with a warning. The exit code is non-zero when any
   upload failed, so the CI step fails. The token is never printed.
 - Needs Node 20 or newer, and has no dependencies. It ships in this package
