@@ -10,7 +10,7 @@ const SOURCE_EXTENSIONS = ['.js', '.mjs', '.cjs'];
 
 export const HELP = `Usage:
   argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --dsn <dsn>]
-                          [--component <slug>] [--token <t>] [--include-sources]
+                          [--app <slug>] [--token <t>] [--include-sources]
                           [--dry-run] <dir> [<dir>...]
 
 Uploads every *.map under the given directories (node_modules skipped) to an
@@ -25,10 +25,11 @@ Options:
   --project <id>       Project id. Or give --dsn (env ARGOS_DSN) and it is read
                        from the DSN.
   --dsn <dsn>          The project's DSN, used only for its project id.
-  --component <slug>   The app the maps belong to (its slug in Argos). With a
+  --app <slug>         The app the maps belong to (its slug in Argos). With a
                        project-wide token the maps go to that app; with an
                        app's token it must be that app. Omit to use the
-                       token's app, or the project level. Env: ARGOS_COMPONENT
+                       token's app, or the project level. Env: ARGOS_APP
+                       Alias: --component (env ARGOS_COMPONENT)
   --token <t>          Upload token from the app page in Argos. Prefer the env
                        var ARGOS_UPLOAD_TOKEN: a flag shows in the process list.
   --include-sources    Also upload the .js/.mjs/.cjs file next to each map.
@@ -37,6 +38,9 @@ Options:
 
 Files are named by their path relative to the directory given, with forward
 slashes: dist/assets/app.js.map uploaded from "dist" is "assets/app.js.map".
+
+After the upload, one line per destination says where the files went: an
+app, or the project level.
 
 Exit codes: 0 all uploaded, 1 an upload failed, 2 bad usage.
 `;
@@ -80,6 +84,7 @@ export function resolveConfig(argv: string[], env: Record<string, string | undef
         project: { type: 'string' },
         dsn: { type: 'string' },
         component: { type: 'string' },
+        app: { type: 'string' },
         token: { type: 'string' },
         'include-sources': { type: 'boolean', default: false },
         'dry-run': { type: 'boolean', default: false },
@@ -113,7 +118,10 @@ export function resolveConfig(argv: string[], env: Record<string, string | undef
   const token = values.token ?? env.ARGOS_UPLOAD_TOKEN ?? '';
   if (!token && !dryRun) throw new UsageError('--token (or ARGOS_UPLOAD_TOKEN) is required');
 
-  const component = (values.component ?? env.ARGOS_COMPONENT ?? '').trim();
+  const component =
+    oneApp(values.component, values.app, '--component and --app') ??
+    oneApp(env.ARGOS_COMPONENT, env.ARGOS_APP, 'ARGOS_COMPONENT and ARGOS_APP') ??
+    '';
 
   return {
     release,
@@ -125,6 +133,17 @@ export function resolveConfig(argv: string[], env: Record<string, string | undef
     dryRun,
     dirs,
   };
+}
+
+/** --app is an alias of --component: both given must agree. */
+function oneApp(
+  component: string | undefined,
+  app: string | undefined,
+  names: string,
+): string | undefined {
+  const [c, a] = [component?.trim(), app?.trim()];
+  if (c && a && c !== a) throw new UsageError(`${names} name different apps: ${c}, ${a}`);
+  return c || a || undefined;
 }
 
 async function* walk(dir: string): AsyncGenerator<string> {
@@ -199,17 +218,37 @@ class Abort extends Error {}
 
 const FATAL: Record<number, string> = {
   401: 'the upload token was rejected (wrong, revoked, or for another installation)',
-  403: 'the upload token is bound to another app than --component',
-  404: 'project or app not found: check --project / the DSN against --api, and --component',
+  403: 'the upload token is bound to another app than --app',
+  404: 'project or app not found: check --project / the DSN against --api, and --app',
 };
 
 type Outcome = 'uploaded' | 'skipped' | 'failed';
 
-async function uploadOne(config: Config, file: UploadFile, io: Io): Promise<Outcome> {
+/** Where the server stored a file: an app slug, null for the project level,
+ *  undefined when an older server does not say. */
+type Destination = string | null | undefined;
+
+interface Result {
+  outcome: Outcome;
+  destination?: string | null;
+}
+
+async function destinationOf(response: Response): Promise<Destination> {
+  try {
+    const body = (await response.json()) as { component?: unknown };
+    return typeof body.component === 'string' || body.component === null
+      ? body.component
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function uploadOne(config: Config, file: UploadFile, io: Io): Promise<Result> {
   const label = `${file.name}  ${formatSize(file.size)}`;
   if (file.size > MAX_FILE_BYTES) {
     io.err(`skipped   ${label}  larger than 20 MiB`);
-    return 'skipped';
+    return { outcome: 'skipped' };
   }
   const body = await readFile(file.path);
   const sleep = io.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -227,18 +266,18 @@ async function uploadOne(config: Config, file: UploadFile, io: Io): Promise<Outc
       });
       if (response.ok) {
         io.out(`uploaded  ${label}  ${String(response.status)}`);
-        return 'uploaded';
+        return { outcome: 'uploaded', destination: await destinationOf(response) };
       }
       const fatal = FATAL[response.status];
       if (fatal) throw new Abort(`${String(response.status)}: ${fatal}`);
       if (response.status === 413) {
         io.err(`failed    ${label}  413 too large for the server`);
-        return 'failed';
+        return { outcome: 'failed' };
       }
       status = response.status;
       if (status < 500) {
         io.err(`failed    ${label}  ${String(status)}`);
-        return 'failed';
+        return { outcome: 'failed' };
       }
     } catch (error) {
       if (error instanceof Abort) throw error;
@@ -246,14 +285,54 @@ async function uploadOne(config: Config, file: UploadFile, io: Io): Promise<Outc
     }
     if (attempt >= 1) {
       io.err(`failed    ${label}  ${String(status)}`);
-      return 'failed';
+      return { outcome: 'failed' };
     }
     await sleep(1000);
   }
 }
 
+function plural(n: number, noun: string): string {
+  return `${String(n)} ${noun}${n === 1 ? '' : 's'}`;
+}
+
+function whereOf(destination: Destination): string {
+  if (destination === undefined) return '';
+  if (destination === null) return ', project level (no app)';
+  return `, app ${destination}`;
+}
+
+/** One line per destination, e.g. "126 source maps -> release web@1, app web". */
+export function destinationLines(
+  release: string,
+  stored: Map<Destination, Record<UploadFile['kind'], number>>,
+): string[] {
+  const lines: string[] = [];
+  // Uploads finish out of order; apps first by slug, then the project level.
+  const tier = (d: Destination): number => (d === null ? 1 : d === undefined ? 2 : 0);
+  const sorted = [...stored].sort(
+    ([a], [b]) => tier(a) - tier(b) || String(a).localeCompare(String(b)),
+  );
+  for (const [destination, n] of sorted) {
+    const what = (
+      [
+        [n.source_map, 'source map'],
+        [n.source, 'source'],
+      ] as const
+    )
+      .filter(([count]) => count > 0)
+      .map(([count, noun]) => plural(count, noun))
+      .join(', ');
+    lines.push(`${what} -> release ${release}${whereOf(destination)}`);
+    if (destination === null) {
+      lines.push('  to store them for one app, pass --app <slug> or use a token bound to the app');
+    }
+  }
+  return lines;
+}
+
 export async function upload(config: Config, files: UploadFile[], io: Io): Promise<number> {
   const counts: Record<Outcome, number> = { uploaded: 0, skipped: 0, failed: 0 };
+  const stored = new Map<Destination, Record<UploadFile['kind'], number>>();
   let next = 0;
   let aborted: Abort | undefined;
 
@@ -261,7 +340,13 @@ export async function upload(config: Config, files: UploadFile[], io: Io): Promi
     while (!aborted && next < files.length) {
       const file = files[next++];
       try {
-        counts[await uploadOne(config, file, io)]++;
+        const { outcome, destination } = await uploadOne(config, file, io);
+        counts[outcome]++;
+        if (outcome === 'uploaded') {
+          const n = stored.get(destination) ?? { source_map: 0, source: 0 };
+          n[file.kind]++;
+          stored.set(destination, n);
+        }
       } catch (error) {
         if (error instanceof Abort) {
           aborted ??= error;
@@ -278,6 +363,7 @@ export async function upload(config: Config, files: UploadFile[], io: Io): Promi
     io.err(`aborted: ${aborted.message}`);
     return 1;
   }
+  for (const line of destinationLines(config.release, stored)) io.out(line);
   io.out(
     `${String(counts.uploaded)} uploaded, ${String(counts.skipped)} skipped, ${String(counts.failed)} failed (release ${config.release})`,
   );

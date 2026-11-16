@@ -64,8 +64,8 @@ function harness(
   return { io, calls, lines, peak: () => peak };
 }
 
-function json(status: number): Response {
-  return new Response(JSON.stringify({ id: 'f1' }), { status });
+function json(status: number, body: object = { id: 'f1' }): Response {
+  return new Response(JSON.stringify(body), { status });
 }
 
 describe('resolveConfig', () => {
@@ -116,6 +116,24 @@ describe('resolveConfig', () => {
       token: TOKEN,
       dirs: ['a', 'b'],
     });
+  });
+
+  it.each([
+    [['--app', 'web'], {}],
+    [[], { ARGOS_APP: 'web' }],
+    [['--app', 'web', '--component', 'web'], {}],
+    [['--app', 'web'], { ARGOS_COMPONENT: 'admin' }],
+  ])('takes --app %j / %j as an alias of --component', (flags, env) => {
+    const argv = ['upload', '--release', 'r', '--project', '1', ...flags, 'd'];
+    expect(resolveConfig(argv, { ...BASE_ENV, ...env }).component).toBe('web');
+  });
+
+  it.each([
+    [['--app', 'web', '--component', 'admin'], {}],
+    [[], { ARGOS_APP: 'web', ARGOS_COMPONENT: 'admin' }],
+  ])('refuses --app and --component naming different apps', (flags, env) => {
+    const argv = ['upload', '--release', 'r', '--project', '1', ...flags, 'd'];
+    expect(() => resolveConfig(argv, { ...BASE_ENV, ...env })).toThrow(/different apps/);
   });
 
   it('parses --dsn', () => {
@@ -271,6 +289,29 @@ describe('run', () => {
     const none = harness();
     expect(await run(argv(), BASE_ENV, none.io)).toBe(0);
     expect(none.calls[0].url.searchParams.has('component')).toBe(false);
+  });
+
+  it('says where the files went, per destination the server answered', async () => {
+    await put('dist/a.js.map');
+    await put('dist/a.js');
+    await put('dist/b.js.map');
+    const h = harness((call) =>
+      json(201, { component: call.url.searchParams.get('name') === 'b.js.map' ? null : 'web' }),
+    );
+    expect(await run(argv('--include-sources'), BASE_ENV, h.io)).toBe(0);
+    expect(h.lines.filter((l) => !l.startsWith('uploaded'))).toEqual([
+      '1 source map, 1 source -> release web@1.0 beta, app web',
+      '1 source map -> release web@1.0 beta, project level (no app)',
+      '  to store them for one app, pass --app <slug> or use a token bound to the app',
+      '3 uploaded, 0 skipped, 0 failed (release web@1.0 beta)',
+    ]);
+  });
+
+  it('names no destination when an older server does not answer one', async () => {
+    await put('dist/a.js.map');
+    const h = harness();
+    expect(await run(argv(), BASE_ENV, h.io)).toBe(0);
+    expect(h.lines).toContain('1 source map -> release web@1.0 beta');
   });
 
   it('aborts on 403 when the token is bound to another app', async () => {

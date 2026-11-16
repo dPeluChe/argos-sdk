@@ -184,6 +184,11 @@ identify('user_8871');
 instrumentFetch();
 ```
 
+Name the release `<app>@<version or sha>`, as in `web@2026.8.1` or
+`web@b905f8e`, and give Sentry and the source map upload the same string. A
+bare `0.6.0` collides across the apps of a project: every app sending it shares
+one release, and its project-level source maps.
+
 The DSN follows Sentry's anatomy, so one string works for both this SDK and a
 Sentry SDK pointed at Argos. The explicit form is equivalent:
 
@@ -375,7 +380,7 @@ The wire contract is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#agent-teleme
 | ----------------- | ------------ | ------------------------------------------------------------ |
 | `dsn`             | —            | Required unless `projectId` + `publicKey` + `host` are given |
 | `environment`     | `production` |                                                              |
-| `release`         | —            |                                                              |
+| `release`         | —            | `<app>@<version or sha>`, e.g. `web@1.4.0`; see Quick start  |
 | `flushIntervalMs` | `5000`       |                                                              |
 | `maxBatchSize`    | `50`         | Also the trigger for an immediate flush                      |
 | `maxBufferSize`   | `1000`       | Past this the oldest events are dropped and counted          |
@@ -564,6 +569,7 @@ and a test in argos-frontend checks they match.
 React, Vite, JavaScript or TypeScript. Set `VITE_ARGOS_DSN` (another bundler:
 its public-variable prefix); it is embedded at build time, so a Dockerfile
 needs `ARG VITE_ARGOS_DSN` and `ARG VITE_ARGOS_RELEASE` passed to the build.
+`VITE_ARGOS_RELEASE` is `<app>@<version or sha>`, e.g. `web@b905f8e`.
 
 ```bash
 npm install https://github.com/dPeluChe/argos-sdk/releases/download/v<VERSION>/argos-browser-<VERSION>.tgz
@@ -1261,22 +1267,33 @@ in CI as the secret `ARGOS_UPLOAD_TOKEN`.
 ```bash
 ARGOS_API_URL=https://argos.example.com \
 ARGOS_UPLOAD_TOKEN=${{ secrets.ARGOS_UPLOAD_TOKEN }} \
-npx argos-sourcemaps upload --release "web@$GIT_SHA" --dsn "$ARGOS_DSN" --component web dist
+npx argos-sourcemaps upload --release "web@$GIT_SHA" --dsn "$ARGOS_DSN" --app web dist
 ```
 
 ```
 argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --dsn <dsn>]
-                        [--component <slug>] [--token <t>] [--include-sources]
+                        [--app <slug>] [--token <t>] [--include-sources]
                         [--dry-run] <dir> [<dir>...]
 ```
+
+It ends with one line per place the files were stored, as the server answered:
+
+```
+126 source maps -> release web@b905f8e, app web
+126 uploaded, 0 skipped, 0 failed (release web@b905f8e)
+```
+
+`project level (no app)` instead of `app web` means the maps serve every app
+of the project that sends that release; it adds how to store them for one app.
 
 - **`--release` must equal the `release` passed to `Sentry.init` / the Argos
   SDK init**, character for character. Maps are stored per release; a
   mismatch means frames stay minified. Build both from the same variable.
 - `--api` (or `ARGOS_API_URL`) is required; there is no default host.
 - The project comes from `--project`, or from `--dsn` / `ARGOS_DSN`.
-- `--component` (or `ARGOS_COMPONENT`) is the slug of the app the maps belong
-  to. With a project-wide token the maps are stored for that app instead of
+- `--app` (or `ARGOS_APP`) is the slug of the app the maps belong to;
+  `--component` and `ARGOS_COMPONENT` are aliases, and two that name different
+  apps are an error. With a project-wide token the maps are stored for that app instead of
   the whole project; with an app's own token it must name that app, or the
   server answers 403. Without it, the maps go to the token's app, or to the
   project level for a project-wide token. Needs an Argos server that knows the
@@ -1288,7 +1305,7 @@ argos-sourcemaps upload --release <release> [--api <url>] [--project <id> | --ds
   map, for maps built without `sourcesContent`.
 - `--dry-run` lists what would be sent and needs no token.
 - Uploads run four at a time, with one retry on a network error or 5xx.
-  A 401 (bad or revoked token), 403 (token of another app than `--component`)
+  A 401 (bad or revoked token), 403 (token of another app than `--app`)
   or 404 (wrong project or unknown app) stops the run; files
   over 20 MiB are skipped with a warning. The exit code is non-zero when any
   upload failed, so the CI step fails. The token is never printed.
