@@ -47,6 +47,7 @@ describe('the event shape', () => {
     });
     expect(event.event_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(event.event_time).toMatch(/Z$/);
+    if (event.kind !== 'product') throw new Error('expected a product event');
     expect(event.session_id[14]).toBe('7');
     expect(event.anon_id[14]).toBe('4');
     expect(event.trace_id).toMatch(/^[0-9a-f]{32}$/);

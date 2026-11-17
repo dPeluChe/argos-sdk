@@ -29,10 +29,13 @@ import { dirname, resolve } from 'node:path';
 // Unload chunking: +0.7 KB raw / +220 B gzip to split the beacon under the 64 KB cap.
 // Idle timers + append-only outbox: +1.7 KB raw / +0.5 KB gzip (mostly the WHY comments, which tsup keeps).
 // Opt-in request timeout and abort in the shared transport (for agents flush): +0.3 KB raw / +0.1 KB gzip.
+// Deprecations capture: +4.3 KB raw / +1.4 KB gzip for the two browser
+// captureros — ReportingObserver and the console.warn wrapper — and the
+// session throttle.
 // Limits are the measured size plus about 2%.
 const BUDGETS = [
-  { entry: 'dist/index.js', maxRawBytes: 48_950, maxGzipBytes: 15_300 },
-  { entry: 'dist/index.cjs', maxRawBytes: 49_200, maxGzipBytes: 14_750 },
+  { entry: 'dist/index.js', maxRawBytes: 54_400, maxGzipBytes: 16_700 },
+  { entry: 'dist/index.cjs', maxRawBytes: 54_600, maxGzipBytes: 16_100 },
 ];
 
 const IMPORT = /from\s*['"](\.[^'"]+)['"]/g;

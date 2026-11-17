@@ -5,6 +5,7 @@ import { ClickTracker } from './clicks.js';
 import { EngagementTracker, type EngagementReport } from './engagement.js';
 import { claimPage, PageviewTracker } from './pageviews.js';
 import { Consent, type ConsentState } from './consent.js';
+import { DeprecationCollector } from './deprecations.js';
 import { sendHeartbeat } from './heartbeat.js';
 import { logger, type Log } from './debug.js';
 import { Outbox } from './outbox.js';
@@ -31,6 +32,7 @@ export class ArgosClient {
   private page: { id: string; path: string; sessionId: string } | undefined;
   private readonly clicks: ClickTracker | undefined;
   private readonly vitals: VitalsCollector | undefined;
+  private readonly deprecations: DeprecationCollector | undefined;
   private readonly log: Log | undefined;
   private readonly local: KeyValueStore;
   private readonly heartbeat: boolean;
@@ -104,6 +106,18 @@ export class ArgosClient {
       });
       this.vitals.start();
     }
+
+    if (options.deprecations) {
+      // A warning carries the same consent gate as every event: the queue
+      // checks it, so the collector only decides what is worth queueing.
+      this.deprecations = new DeprecationCollector(
+        (props) => {
+          this.queue('deprecation', props, undefined, 'deprecation');
+        },
+        typeof options.deprecations === 'object' ? options.deprecations : {},
+      );
+      this.deprecations.start();
+    }
     this.beat();
   }
 
@@ -127,12 +141,17 @@ export class ArgosClient {
     this.queue(name, props, sessionId);
   }
 
-  private queue(name: string, props?: Props, sessionId?: string): ArgosEvent | undefined {
+  private queue(
+    name: string,
+    props?: Props,
+    sessionId?: string,
+    kind: 'product' | 'deprecation' = 'product',
+  ): ArgosEvent | undefined {
     // Checked here rather than in the transport: `buildEvent` reads the
     // identity, and reading it is what creates and stores an `anon_id`. The
     // gate has to sit in front of that, not in front of the send.
     if (!this.gate(`drop ${name}`)) return undefined;
-    const event = this.buildEvent(name, props, sessionId);
+    const event = this.buildEvent(name, props, sessionId, kind);
     this.log?.(`queue ${event.kind} ${event.name}`);
     this.transport.enqueue(event);
     return event;
@@ -309,15 +328,21 @@ export class ArgosClient {
     this.pageviews?.stop();
     this.clicks?.stop();
     this.vitals?.stop();
+    this.deprecations?.stop();
     this.transport.stop();
   }
 
-  private buildEvent(name: string, props?: Props, sessionId?: string): ArgosEvent {
+  private buildEvent(
+    name: string,
+    props?: Props,
+    sessionId?: string,
+    kind: 'product' | 'deprecation' = 'product',
+  ): ArgosEvent {
     const trace = newTrace();
     const event: ArgosEvent = {
       event_id: uuidv4(),
       event_time: new Date().toISOString(),
-      kind: 'product',
+      kind,
       name: name.slice(0, MAX_NAME_LENGTH),
       session_id: sessionId ?? this.identity.sessionId(),
       anon_id: this.identity.anonId(),

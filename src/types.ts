@@ -1,20 +1,15 @@
 /** Event properties. Serialized to JSONB server-side, so anything JSON-safe goes. */
 export type Props = Record<string, unknown>;
 
-/** One product event, exactly as the workspace's `docs/INGEST_API.md` defines it. */
-export interface ArgosEvent {
+/** What every event carries, whichever kind it is. */
+interface EventBase {
   event_id: string;
   event_time: string;
-  kind: 'product';
   name: string;
-  session_id: string;
-  anon_id: string;
   user_id?: string;
   /** The tenant this event happened in. Stamped from the sticky value set by
    *  `account()`, absent when nothing set one. */
   account_id?: string;
-  trace_id: string;
-  span_id: string;
   release?: string;
   environment?: string;
   /** Where the event was produced. The wire takes any string; these are the
@@ -22,6 +17,30 @@ export interface ArgosEvent {
   platform: 'browser' | 'server';
   props?: Props;
 }
+
+/** One product event, exactly as the workspace's `docs/INGEST_API.md` defines
+ *  it. The correlation spine is mandatory: it cannot be reconstructed once
+ *  the event is stored. */
+export interface ProductEvent extends EventBase {
+  kind: 'product';
+  session_id: string;
+  anon_id: string;
+  trace_id: string;
+  span_id: string;
+}
+
+/** A warning about an API on its way out. The spine is optional for this
+ *  kind — a cron's warning has no visit behind it — and a browser warning
+ *  carries one, which is what answers who the removal will hit. */
+export interface DeprecationEvent extends EventBase {
+  kind: 'deprecation';
+  session_id?: string;
+  anon_id?: string;
+  trace_id?: string;
+  span_id?: string;
+}
+
+export type ArgosEvent = ProductEvent | DeprecationEvent;
 
 export interface EventBatch {
   sent_at: string;
@@ -41,6 +60,20 @@ export interface AutoPageviewOptions {
   ignoreParams?: string[];
   /** Make the hash part of the page identity, for hash-based routers. Off by default. */
   hashMode?: boolean;
+}
+
+/** Fine-tuning for `deprecations`. Both captureros are on unless turned off. */
+export interface DeprecationOptions {
+  /** Extra literal phrases that classify a console warning as a deprecation,
+   * matched case-insensitively as substrings alongside the built-in net. */
+  patterns?: string[];
+  /** Watch the browser's own deprecation reports (`ReportingObserver`). On by
+   *  default; the only channel that sees engine warnings such as Chrome's
+   *  "Fenced Frame API is deprecated". */
+  observer?: boolean;
+  /** Wrap `console.warn` and send whatever matches a deprecation pattern: the
+   *  channel a CDN library's warnings go through. On by default. */
+  console?: boolean;
 }
 
 export interface InitOptions {
@@ -79,6 +112,15 @@ export interface InitOptions {
    * problem the install did not ask for.
    */
   autoClicks?: boolean;
+  /**
+   * Report warnings about APIs on their way out as `deprecation` events: a
+   * CDN library's `console.warn`, the browser's own deprecation reports
+   * (`ReportingObserver`). Off by default; `true` turns on both captureros.
+   *
+   * The point is lead time: the warning sits in the console for months
+   * before the removal breaks the app, and nobody watches the console.
+   */
+  deprecations?: boolean | DeprecationOptions;
   /**
    * Store nothing and send nothing until `grantConsent()` is called.
    *

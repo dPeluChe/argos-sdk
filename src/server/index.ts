@@ -3,10 +3,15 @@ import { resolveEndpoint, eventsUrl, type Endpoint } from '../dsn.js';
 import { newSpanId, uuidv4 } from '../ids.js';
 import { sendHeartbeat } from '../heartbeat.js';
 import { deliver } from '../transport.js';
-import type { ArgosEvent, InitOptions, Props } from '../types.js';
+import type { ArgosEvent, DeprecationEvent, InitOptions, Props } from '../types.js';
 import { spineFrom, type HeaderSource, type Spine } from './spine.js';
 
 export { spineFrom, parseBaggage, type Spine, type HeaderSource } from './spine.js';
+
+/** The built-in Node warnings worth their own throttle bucket: everything
+ * else the runtime emits on its own schedule. */
+const DEPRECATION_WARNING = 'DeprecationWarning';
+const MESSAGE_MAX = 2_000;
 
 /**
  * The server half. It sends product events that happened where no browser was
@@ -19,7 +24,9 @@ export { spineFrom, parseBaggage, type Spine, type HeaderSource } from './spine.
  *
  * Errors are not this SDK's job. Any Sentry SDK reports them to Argos by
  * changing its DSN, so building a second way to do it would be work spent to
- * make somebody choose.
+ * make somebody choose. Deprecations are: with `deprecations: true` the
+ * process's own `DeprecationWarning`s ride along, and no Sentry SDK reports
+ * those to Argos.
  */
 export class ArgosServer {
   private readonly endpoint: Endpoint;
@@ -27,6 +34,7 @@ export class ArgosServer {
   private readonly release: string | undefined;
   private readonly log: Log | undefined;
   private pending: ArgosEvent[] = [];
+  private readonly warned = new Set<string>();
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
@@ -43,6 +51,41 @@ export class ArgosServer {
         this.log,
       );
     }
+    if (options.deprecations) this.watchWarnings();
+  }
+
+  /** Runtime warnings about APIs on their way out. No spine: a warning from a
+   *  cron has no visit behind it, and the deprecation wire allows the gap. */
+  private watchWarnings(): void {
+    process.on('warning', (warning: Error & { code?: string }) => {
+      if (warning.name !== DEPRECATION_WARNING) return;
+      // `code` is the condemned API's id (DEP0044); the message text is what
+      // the server groups by, and its head is distinctive enough to throttle.
+      const message = warning.message.slice(0, MESSAGE_MAX);
+      if (message === '') return;
+      const signature = `${warning.code ?? ''}:${message.slice(0, 80)}`;
+      if (this.warned.has(signature)) return;
+      // A long-lived process that clears the set starts reporting the same
+      // warnings again — which is also how the registry learns they persist.
+      if (this.warned.size >= 100) this.warned.clear();
+      this.warned.add(signature);
+      const event: DeprecationEvent = {
+        event_id: uuidv4(),
+        event_time: new Date().toISOString(),
+        kind: 'deprecation',
+        name: 'deprecation',
+        environment: this.environment,
+        platform: 'server',
+        props: {
+          message,
+          origin: 'server',
+          ...(warning.code ? { feature: warning.code } : {}),
+        },
+      };
+      if (this.release) event.release = this.release;
+      if (warning.stack) event.props = { ...event.props, stack: warning.stack };
+      this.accept(event);
+    });
   }
 
   /**
