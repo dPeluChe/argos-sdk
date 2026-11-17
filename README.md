@@ -263,6 +263,16 @@ export async function POST(request: Request) {
 `initServer` takes `debug: true` too, and then logs each request's visit (or
 why there was none), each flush's result and the startup heartbeat's.
 
+With `deprecations: true`, the process's own `DeprecationWarning`s ride along
+as `deprecation` events — no visit required, a cron's warning has no session.
+Node's `code` (`DEP0025`) travels as the condemned API's id, and each distinct
+warning is reported once per process; `flush()` sends them with everything
+else.
+
+```ts
+const argos = initServer({ dsn: process.env.ARGOS_DSN, deprecations: true });
+```
+
 ### Agents half: `@argos/browser/agents`
 
 For Node 20+ (global `fetch`), and nothing in it reaches the browser bundle. It
@@ -388,6 +398,7 @@ The wire contract is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#agent-teleme
 | `webVitals`       | `true`       | One `web_vital` event per metric, on page hide               |
 | `engagement`      | `true`       | `page_engagement` events: engaged time per page — see below  |
 | `autoClicks`      | `false`      | Track elements marked `data-argos-event` — see below         |
+| `deprecations`    | `false`      | Report warnings about APIs on their way out — see below      |
 | `requireConsent`  | `false`      | See "Consent" above                                          |
 | `debug`           | `false`      | Log what the SDK does to the console — see below             |
 | `heartbeat`       | `true`       | One startup heartbeat — see "Startup heartbeat"              |
@@ -520,6 +531,44 @@ One delegated listener, registered on the capture phase so a menu or modal that
 calls `stopPropagation` cannot silently delete the event. It is passive and
 never calls `preventDefault`: an analytics listener that can cancel a click can
 break a checkout button.
+
+### Deprecations, while there is still time
+
+```ts
+init({ dsn, deprecations: true });
+```
+
+A deprecation warning is the inverse of an error: it does not matter that it
+keeps happening, it matters to see it weeks before the removal breaks the app.
+The warning usually sits in the browser console for months while nobody is
+watching. This option reports it to Argos, where it lands in the deprecations
+registry with a planning lifecycle.
+
+Two captureros, one per world of warning:
+
+- **`ReportingObserver`** sees what the browser engine deprecates — the only
+  channel those warnings exist in, and the one that carries the removal date
+  when Chrome has announced one.
+- **the `console.warn` wrapper** sees what libraries emit: a CDN script has no
+  other way to report its own deprecation.
+
+Both are on with `deprecations: true`; either can be turned off, and extra
+phrases can join the built-in net:
+
+```ts
+init({
+  dsn,
+  deprecations: { patterns: ['canasta api'], observer: true, console: true },
+});
+```
+
+A warning is reported **once per tab session** — a condemned CDN warns on every
+page load, and the registry groups by message anyway. Captured warnings pass
+through the same consent gate as every event. The console itself stays exactly
+as it was: the capture is a side effect, never a replacement.
+
+Firefox reports nothing (no `ReportingObserver`, and its engine's messages
+never pass through the JavaScript console) — a declared gap, not a hidden one.
 
 ### Web vitals
 
