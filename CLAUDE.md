@@ -7,8 +7,8 @@ capture errors itself, and there is no Python version.
 
 ## Read first
 
-- `../CLAUDE.md` and `../CONTRIBUTING.md`: workspace map, rules shared by all
-  the repos, and how to bring the system up.
+- `../CLAUDE.md` and `../CONTRIBUTING.md`: workspace map, rules shared by every
+  repo, and how to bring the system up.
 - `docs/DEVELOPMENT.md`: the stack, the file layout, the gate to run before a
   commit and the CI matrix, the section "Rules for this repo", and the design
   decisions.
