@@ -18,11 +18,11 @@ Audit of 2026-10-22, read from code (no bundle or payload measured). Order is pr
 
 - [ ] **Feature flags as a first-class event dimension.** The SDK captures the active flags and sends them with every event; nothing exists in code yet. (added: 2026-10-15)
   - Related: argos-workers (storage), argos-backend (filter), argos-frontend (show).
-- [ ] **Feedback as its own wire object.** The SDK sends it separately from the event, so a thumbs down can arrive minutes later without rewriting the stored event. Shape like `POST /v1/signals/track` with `event_id` (see `../docs/RESEARCH/RAINDROP.md`). (added: 2026-10-15)
+- [ ] **Feedback as its own wire object.** The SDK sends it separately from the event, so a thumbs down can arrive minutes later without rewriting the stored event. Shape like `POST /v1/signals/track` with `event_id` (see `../../docs/RESEARCH/RAINDROP.md`). (added: 2026-10-15)
   - Related: argos-workers (owner, ingest), argos-backend (read).
 - [ ] **Decision: stable or rotating `anon_id`, and an optional cookieless mode.** The SDK owns it. Today `anon_id` lives in browser storage (`src/session.ts`). Cookieless mode would hash a rotating salt with user agent plus IP, like Plausible and Umami. It has legal consequences in the EU. Decide before the schema hardens. (added: 2026-10-15)
   - Related: argos-workers (sessionizer midnight bridge).
-- [ ] **RB-1: point 2 or 3 of the lab's 18 applications at a real instance for 7 days** (not all 18). Human validation of the SDK integration; procedure in `../docs/GUIDES/VALIDATION_RUNBOOKS.md`. (added: 2026-10-15)
+- [ ] **RB-1: point 2 or 3 of the lab's 18 applications at a real instance for 7 days** (not all 18). Human validation of the SDK integration; procedure in `../../docs/GUIDES/VALIDATION_RUNBOOKS.md`. (added: 2026-10-15)
   - Related: argos-sdk-demo (reference integration), argos-workers and argos-backend (the instance under test).
 
 ## Ideas (not scheduled)

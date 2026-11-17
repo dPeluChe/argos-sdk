@@ -99,8 +99,8 @@ it waits for `grantConsent()`, and after a refusal it is never sent.
 
 An install that only reports errors cannot prove it is live: no news is not
 evidence. So `init`, `initServer` and `initAgents` each send one small heartbeat to
-`POST /api/{project}/heartbeat/`, and the workspace's `/check` lists what has
-checked in under `components` (contract:
+`POST /api/{project}/heartbeat/`, and ingest's `GET /api/{project}/check` lists
+what has checked in under `components` (contract:
 [`../docs/INGEST_API.md`](../docs/INGEST_API.md)).
 
 ```json
@@ -113,7 +113,7 @@ checked in under `components` (contract:
 }
 ```
 
-The answer names the newest SDK (`{"accepted": 1, "latest_sdk": "0.8.14"}`).
+The answer names the newest SDK (`{"accepted": 1, "latest_sdk": "0.15.7"}`).
 When the installed one is older, the SDK prints one `console.warn` with the
 install command, for the developer: on a server, outside `production`, on
 `localhost` or with `debug` on. A production page in a visitor's browser stays
@@ -391,6 +391,7 @@ The wire contract is in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#agent-teleme
 | `requireConsent`  | `false`      | See "Consent" above                                          |
 | `debug`           | `false`      | Log what the SDK does to the console — see below             |
 | `heartbeat`       | `true`       | One startup heartbeat — see "Startup heartbeat"              |
+| `trackVisitor`    | `true`       | `visitor_id` on pageviews — see "Returning visitors"         |
 
 ### Debug mode
 

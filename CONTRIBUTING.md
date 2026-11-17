@@ -1,8 +1,8 @@
 # Contributing to argos-sdk
 
-Argos is five repositories deployed as one product. **Read the workspace guide
+Argos is several repositories deployed as one product. **Read the workspace guide
 first** — how to bring the whole system up, seed data, and the rules that hold
-across all five live in `../CONTRIBUTING.md`.
+across all of them live in `../CONTRIBUTING.md`.
 
 This file is only what is specific to the SDK.
 
