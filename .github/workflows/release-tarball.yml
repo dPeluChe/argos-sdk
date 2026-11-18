@@ -57,11 +57,13 @@ jobs:
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
           auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
           release=$(curl -fsS "${auth[@]}" "$api/releases/tags/$TAG" 2>/dev/null || true)
+          # Lockfiles pin the tarball's sha512: replacing it breaks npm ci for every app. Content changes need a new version.
+          if printf '%s' "$release" | node -e 'const r=JSON.parse(require("fs").readFileSync(0)||"{}");process.exit((r.assets||[]).some(x=>x.name===process.argv[1])?0:1)' "$tarball" 2>/dev/null; then
+            echo "::error::$tarball is already on $TAG; bump the version instead of re-publishing it"; exit 1
+          fi
           payload=$(printf '%s' "$release" | node scripts/release-notes.mjs "$tarball" "$GITHUB_REPOSITORY" "$TAG")
           id=$(printf '%s' "$release" | node -p 'JSON.parse(require("fs").readFileSync(0)).id' 2>/dev/null || true)
           if [ -z "$id" ] || [ "$id" = undefined ]; then method=POST url="$api/releases"; else method=PATCH url="$api/releases/$id"; fi
           id=$(curl -fsS "${auth[@]}" -X "$method" "$url" -d "$payload" | node -p 'JSON.parse(require("fs").readFileSync(0)).id')
-          old=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | node -p 'const a=JSON.parse(require("fs").readFileSync(0)).find(x=>x.name===process.argv[1]); a?a.id:""' "$tarball")
-          if [ -n "$old" ]; then curl -fsS "${auth[@]}" -X DELETE "$api/releases/assets/$old"; fi
           curl -fsS "${auth[@]}" -H "Content-Type: application/gzip" --data-binary "@$tarball" \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/$id/assets?name=$tarball" >/dev/null

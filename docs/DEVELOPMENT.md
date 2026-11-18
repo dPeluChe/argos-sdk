@@ -70,8 +70,10 @@ Releases are cut by tag: a `v*` tag runs `release-tarball.yml`, which checks the
 tag equals `package.json`'s version and uploads the `npm pack` tarball to the
 GitHub release. The release body gets the tarball's `sha512-...` (the npm
 integrity string, base64) and sha256 in a block between
-`<!-- argos-sdk-checksums -->` markers; on a re-run, or when the release already
-exists, the block is replaced and the rest of the body is kept. The flow across
+`<!-- argos-sdk-checksums -->` markers; when the release already exists the block
+is replaced and the rest of the body is kept. A tarball already on the release is
+never replaced: apps pin its sha512 in their lockfiles, so a moved tag fails the
+workflow and changed content needs a new version. The flow across
 repos is in
 [`../../docs/GUIDES/RELEASES.md`](../../docs/GUIDES/RELEASES.md).
 
