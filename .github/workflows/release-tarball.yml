@@ -62,6 +62,7 @@ jobs:
           if [ -z "$id" ] || [ "$id" = undefined ]; then method=POST url="$api/releases"; else method=PATCH url="$api/releases/$id"; fi
           id=$(curl -fsS "${auth[@]}" -X "$method" "$url" -d "$payload" | node -p 'JSON.parse(require("fs").readFileSync(0)).id')
           old=$(curl -fsS "${auth[@]}" "$api/releases/$id/assets" | node -p 'const a=JSON.parse(require("fs").readFileSync(0)).find(x=>x.name===process.argv[1]); a?a.id:""' "$tarball")
-          if [ -n "$old" ]; then curl -fsS "${auth[@]}" -X DELETE "$api/releases/assets/$old"; fi
+          # Lockfiles pin the tarball's sha512: replacing it breaks npm ci for every app. Content changes need a new version.
+          if [ -n "$old" ]; then echo "::error::$tarball is already on $TAG; bump the version instead of re-publishing it"; exit 1; fi
           curl -fsS "${auth[@]}" -H "Content-Type: application/gzip" --data-binary "@$tarball" \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/$id/assets?name=$tarball" >/dev/null
