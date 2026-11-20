@@ -25,6 +25,28 @@ Audit of 2026-10-22, read from code (no bundle or payload measured). Order is pr
 - [ ] **RB-1: point 2 or 3 of the lab's 18 applications at a real instance for 7 days** (not all 18). Human validation of the SDK integration; procedure in `../../docs/GUIDES/VALIDATION_RUNBOOKS.md`. (added: 2026-10-15)
   - Related: argos-sdk-demo (reference integration), argos-workers and argos-backend (the instance under test).
 
+## Setup per app kind
+
+Decided 2026-11-20: the app kinds `agent`, `mobile`, `extension` and the
+Next.js + Convex stack need a setup of their own; serverless functions are
+treated as `worker` and get none. First establish what works today, then write
+the recipe or the code. Related for each: argos-backend (kind list),
+argos-frontend (recipe shown at creation, sections per kind).
+
+- [ ] **Agent apps.** An agent sends logs, errors and run telemetry, never
+  product events (Tasky's agent is the first). Recipe per language: Node through
+  `@argos/browser/agents`, Python and others through OTLP. (added: 2026-11-20)
+- [ ] **Mobile: Expo / React Native and native (Swift, Kotlin).** Find out
+  whether the browser SDK runs under React Native and whether a stock native
+  error SDK can post envelopes to Argos ingest; then a recipe or a mobile entry.
+  (added: 2026-11-20)
+- [ ] **Browser extensions.** Background service worker and content scripts:
+  no `window` in the first, a host page that is not ours in the second; decide
+  what the SDK captures in each. (added: 2026-11-20)
+- [ ] **Next.js + Convex.** Convex functions are server code without HTTP, so
+  the Next.js recipe misses their errors and logs; find where the Node SDK can
+  run inside a Convex action. (added: 2026-11-20)
+
 ## Ideas (not scheduled)
 
 - **Grow `argos-sourcemaps` into a general CLI.** The workspace item "`argos releases files upload`" (so each app's CI need not use `curl`) is mostly covered: `argos-sourcemaps upload` (`src/cli`) walks directories for `*.map`, uploads them to a release with `--release`, `--api`, `--project` or `--dsn`, `--token` (env `ARGOS_UPLOAD_TOKEN`), `--include-sources` and `--dry-run`, and exits 0, 1 or 2. Only a broader `argos releases ...` command surface is left. (added: 2026-10-15)
