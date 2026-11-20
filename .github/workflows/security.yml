@@ -1,0 +1,40 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so advisories published between pushes still fail the build.
+    - cron: '41 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  deps:
+    name: production advisories and licenses
+    runs-on: [self-hosted, sbk-small]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          # Off explicitly, since the runner does not outlive the job.
+          package-manager-cache: false
+
+      - name: install
+        run: npm ci
+
+      - name: high and critical advisories in production dependencies
+        run: npm run audit:prod
+
+      - name: production licenses (allowlist + .dependency-exceptions)
+        run: npm run license:check

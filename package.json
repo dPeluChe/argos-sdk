@@ -39,7 +39,9 @@
     "build": "tsup",
     "prepare": "npm run build",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run size",
-    "size": "node scripts/size-budget.mjs"
+    "size": "node scripts/size-budget.mjs",
+    "audit:prod": "node scripts/audit-gate.mjs",
+    "license:check": "node scripts/license-gate.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

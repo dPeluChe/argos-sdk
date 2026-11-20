@@ -1,0 +1,2 @@
+# Reviewed exceptions. One row per item: ecosystem|id|name|reason
+#   id = the license string for a license row (e.g. LGPL-3.0), or the advisory ID.

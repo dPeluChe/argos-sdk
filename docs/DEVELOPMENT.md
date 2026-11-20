@@ -63,6 +63,8 @@ every PR, on Node 20, 22 and 24:
 
 `make help` lists every target.
 
+Dependency gates run in `.github/workflows/security.yml` on PRs, on `main`, and weekly, and are not part of `make check`: `npm run audit:prod` (`scripts/audit-gate.mjs`, over `npm audit --omit=dev`) fails on a high or critical advisory in a production dependency; `npm run license:check` (`scripts/license-gate.mjs`) fails on a production dependency whose license is outside the allowlist in the script, unless `.dependency-exceptions` has a row for that package, license and reason. The package has no production dependencies today, so both gates pass trivially until one is added.
+
 CI adds one step `make check` does not: `init()` in a bare Node process must
 exit on its own (the flush timer is unref'd).
 
