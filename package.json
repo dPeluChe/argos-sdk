@@ -40,7 +40,7 @@
     "prepare": "npm run build",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run size",
     "size": "node scripts/size-budget.mjs",
-    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "audit:prod": "node scripts/audit-gate.mjs",
     "license:check": "node scripts/license-gate.mjs"
   },
   "devDependencies": {
