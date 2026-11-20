@@ -1,5 +1,5 @@
 // Fails on a production dependency whose license is off the allowlist and has no
-// reviewed "npm|name|license|reason" row in .dependency-exceptions. Run after npm ci.
+// reviewed "npm|license|name|reason" row in .dependency-exceptions. Run after npm ci.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -32,9 +32,9 @@ const listed = new Set(
         .split('\n')
         .filter((line) => line.trim() && !line.startsWith('#'))
         .map((line) => {
-          const [ecosystem, name, license, reason] = line.split('|').map((part) => part.trim());
+          const [ecosystem, id, name, reason] = line.split('|').map((part) => part.trim());
           if (!reason) throw new Error(`exception without a reason: ${line}`);
-          return `${ecosystem}|${name}|${license}`;
+          return `${ecosystem}|${id}|${name}`;
         })
     : [],
 );
@@ -51,7 +51,7 @@ for (const [key, info] of Object.entries(report)) {
   const name = key.slice(0, key.lastIndexOf('@'));
   if (name === root) continue;
   const license = Array.isArray(info.licenses) ? info.licenses.join(' AND ') : info.licenses;
-  if (allowed(license) || listed.has(`npm|${name}|${license}`)) continue;
+  if (allowed(license) || listed.has(`npm|${license}|${name}`)) continue;
   console.log(
     `::error title=license::${key} is ${license}: not on the allowlist and not in .dependency-exceptions`,
   );
