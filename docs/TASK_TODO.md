@@ -34,18 +34,18 @@ the recipe or the code. Related for each: argos-backend (kind list),
 argos-frontend (recipe shown at creation, sections per kind).
 
 - [ ] **Agent apps.** An agent sends logs, errors and run telemetry, never
-  product events (Tasky's agent is the first). Recipe per language: Node through
-  `@argos/browser/agents`, Python and others through OTLP. (added: 2026-11-20)
+      product events (Tasky's agent is the first). Recipe per language: Node through
+      `@argos/browser/agents`, Python and others through OTLP. (added: 2026-11-20)
 - [ ] **Mobile: Expo / React Native and native (Swift, Kotlin).** Find out
-  whether the browser SDK runs under React Native and whether a stock native
-  error SDK can post envelopes to Argos ingest; then a recipe or a mobile entry.
-  (added: 2026-11-20)
+      whether the browser SDK runs under React Native and whether a stock native
+      error SDK can post envelopes to Argos ingest; then a recipe or a mobile entry.
+      (added: 2026-11-20)
 - [ ] **Browser extensions.** Background service worker and content scripts:
-  no `window` in the first, a host page that is not ours in the second; decide
-  what the SDK captures in each. (added: 2026-11-20)
+      no `window` in the first, a host page that is not ours in the second; decide
+      what the SDK captures in each. (added: 2026-11-20)
 - [ ] **Next.js + Convex.** Convex functions are server code without HTTP, so
-  the Next.js recipe misses their errors and logs; find where the Node SDK can
-  run inside a Convex action. (added: 2026-11-20)
+      the Next.js recipe misses their errors and logs; find where the Node SDK can
+      run inside a Convex action. (added: 2026-11-20)
 
 ## Ideas (not scheduled)
 
