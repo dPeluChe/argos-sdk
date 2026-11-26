@@ -95,10 +95,10 @@ does not require consent does not read that silence as a fresh yes.
 The startup heartbeat (below) follows the same gate: with `requireConsent` on,
 it waits for `grantConsent()`, and after a refusal it is never sent.
 
-## Startup heartbeat
+## Heartbeat
 
 An install that only reports errors cannot prove it is live: no news is not
-evidence. So `init`, `initServer` and `initAgents` each send one small heartbeat to
+evidence. So `init`, `initServer` and `initAgents` each send a small heartbeat to
 `POST /api/{project}/heartbeat/`, and ingest's `GET /api/{project}/check` lists
 what has checked in under `components` (contract:
 [`../docs/INGEST_API.md`](../docs/INGEST_API.md)).
@@ -126,8 +126,13 @@ page or process (read off its global, never imported), or `null`.
 - **Browser:** at most once per browser per day (the date is kept in
   `localStorage` under `argos.heartbeat`; without storage, once per page load),
   and only once consent allows sending. `runtime` is `browser`.
-- **Server:** once per process, right after `initServer`. `runtime` is `node`,
-  `sdk.name` is `@argos/browser/server`.
+- **Server:** once per process right after `initServer`, then every
+  `heartbeatInterval` milliseconds (60 000 by default) so a backend that stops
+  beating is visible as silence. Each repeat is jittered ±10 % so a fleet that
+  booted together never arrives in lockstep. `heartbeatInterval: false` keeps the
+  single startup beat; `close()` stops the timer. A second `initServer` in the
+  same process does not double the rate: the beat proves the process is alive.
+  `runtime` is `node`, `sdk.name` is `@argos/browser/server`.
 - **Agents:** once per process, right after `initAgents`. `runtime` is `node`,
   `sdk.name` is `@argos/browser/agents`.
 

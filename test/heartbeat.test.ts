@@ -87,7 +87,7 @@ describe('server heartbeat', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const { initServer } = await server();
 
-    expect(() => initServer({ dsn: DSN, debug: true })).not.toThrow();
+    expect(() => initServer({ dsn: DSN, debug: true, heartbeatInterval: false })).not.toThrow();
     await vi.runAllTimersAsync();
 
     expect(info).toHaveBeenCalledWith('[argos] heartbeat failed');
