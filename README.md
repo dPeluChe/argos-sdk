@@ -127,15 +127,15 @@ page or process (read off its global, never imported), or `null`.
   `localStorage` under `argos.heartbeat`; without storage, once per page load),
   and only once consent allows sending. `runtime` is `browser`.
 - **Server:** once per process right after `initServer`, then every
-  `heartbeatInterval` milliseconds (60 000 by default) so a backend that stops
-  beating is visible as silence. Each repeat is jittered ±10 % so a fleet that
-  booted together never arrives in lockstep, and each beat declares
-  `interval_seconds` (rounded up to whole minutes) so Argos creates the
-  `keepalive` monitor that judges the silence. `heartbeatInterval: false` keeps
-  the single startup beat and declares no cadence; `close()` stops the timer. A
-  second `initServer` in the same process does not double the rate: the beat
-  proves the process is alive. `runtime` is `node`, `sdk.name` is
-  `@argos/browser/server`.
+  `heartbeatInterval` milliseconds (60 000 by default, capped at one hour) so a
+  backend that stops beating is visible as silence. Each repeat is jittered
+  ±10 % so a fleet that booted together never arrives in lockstep, and each beat
+  declares `interval_seconds` (rounded up to whole minutes, never above 3600) so
+  Argos creates the `keepalive` monitor that judges the silence.
+  `heartbeatInterval: false` keeps the single startup beat and declares no
+  cadence; `close()` stops the timer. A second `initServer` in the same process
+  does not double the rate: the beat proves the process is alive. `runtime` is
+  `node`, `sdk.name` is `@argos/browser/server`.
 - **Agents:** once per process, right after `initAgents`. `runtime` is `node`,
   `sdk.name` is `@argos/browser/agents`.
 

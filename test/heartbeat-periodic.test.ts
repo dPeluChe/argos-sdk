@@ -62,6 +62,22 @@ describe('periodic heartbeat', () => {
     instance.close();
   });
 
+  it('clamps a cadence slower than an hour, beat and declaration together', async () => {
+    const { initServer } = await server();
+    const instance = initServer({ dsn: DSN, heartbeatInterval: 10 * 3_600_000 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Ten hours would declare an hour and beat every ten, so a healthy process
+    // would be marked missed. Both sides clamp to the same ceiling.
+    expect(body(0).interval_seconds).toBe(3600);
+
+    await vi.advanceTimersByTimeAsync(50 * 60_000);
+    expect(beats()).toBe(1);
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(beats()).toBe(2);
+    instance.close();
+  });
+
   it('uses a minute by default', async () => {
     const { initServer } = await server();
     const instance = initServer({ dsn: DSN });

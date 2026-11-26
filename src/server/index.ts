@@ -11,6 +11,10 @@ export { spineFrom, parseBaggage, type Spine, type HeaderSource } from './spine.
 /** A minute apart: often enough to notice a dead process, cheap enough to ignore. */
 const DEFAULT_HEARTBEAT_INTERVAL = 60_000;
 
+/** The monitor schedule is minute-granular and caps at an hour, so a beat can
+ *  never promise a slower cadence than this. */
+const MAX_HEARTBEAT_INTERVAL = 3_600_000;
+
 /** Spreads a fleet that booted together, so beats never arrive in lockstep. */
 const HEARTBEAT_JITTER = 0.1;
 
@@ -53,11 +57,12 @@ export class ArgosServer {
     if (options.heartbeat !== false && !beatRunning) {
       beatRunning = true;
       this.ownsBeat = true;
-      const every = options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL;
-      if (every !== false && every > 0) {
-        // The monitor schedule is minute-granular: declare the next whole minute
-        // so the expectation is never shorter than the beat actually sent.
-        this.declaredIntervalSeconds = Math.min(3600, Math.max(60, Math.ceil(every / 60_000) * 60));
+      const configured = options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL;
+      if (configured !== false && configured > 0) {
+        // Clamp the beat with the declaration: promising a slower cadence than
+        // the one sent would get a healthy process marked missed.
+        const every = Math.min(configured, MAX_HEARTBEAT_INTERVAL);
+        this.declaredIntervalSeconds = Math.max(60, Math.ceil(every / 60_000) * 60);
         this.scheduleBeat(every);
       }
       this.beat();
