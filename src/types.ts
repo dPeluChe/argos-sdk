@@ -95,6 +95,12 @@ export interface InitOptions {
    */
   heartbeat?: boolean;
   /**
+   * Server only: repeat the heartbeat this often, in milliseconds. A backend
+   * that stops beating is then detectable as silence instead of looking like a
+   * quiet install. Defaults to 60000; `false` keeps the single startup beat.
+   */
+  heartbeatInterval?: number | false;
+  /**
    * Stamp pageviews with `visitor_id`, a random id kept in `localStorage` that
    * recognises a returning browser. On by default; `false` neither creates nor
    * sends it. Never sent when consent is missing or storage is unavailable.

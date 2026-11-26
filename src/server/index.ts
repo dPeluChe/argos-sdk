@@ -8,6 +8,22 @@ import { spineFrom, type HeaderSource, type Spine } from './spine.js';
 
 export { spineFrom, parseBaggage, type Spine, type HeaderSource } from './spine.js';
 
+/** A minute apart: often enough to notice a dead process, cheap enough to ignore. */
+const DEFAULT_HEARTBEAT_INTERVAL = 60_000;
+
+/** The monitor schedule is minute-granular and caps at an hour, so a beat can
+ *  never promise a slower cadence than this. */
+const MAX_HEARTBEAT_INTERVAL = 3_600_000;
+
+/** Spreads a fleet that booted together, so beats never arrive in lockstep. */
+const HEARTBEAT_JITTER = 0.1;
+
+// One heartbeat per process: the beat proves the process is alive, so a second
+// ArgosServer in the same realm must not double the rate. The owner releases it
+// on close, which is what lets a restart inside one process beat again.
+let beatRunning = false;
+let beatsSent = 0;
+
 /**
  * The server half. It sends product events that happened where no browser was
  * looking — an invoice charged, a quota consumed, a job that finished — and it
@@ -27,6 +43,10 @@ export class ArgosServer {
   private readonly release: string | undefined;
   private readonly log: Log | undefined;
   private pending: ArgosEvent[] = [];
+  private beatTimer?: ReturnType<typeof setTimeout>;
+  private closed = false;
+  private ownsBeat = false;
+  private declaredIntervalSeconds?: number;
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
@@ -34,15 +54,65 @@ export class ArgosServer {
     this.log?.(`init ${this.endpoint.baseUrl} project ${this.endpoint.projectId}`);
     this.environment = options.environment ?? 'production';
     this.release = options.release;
-    if (options.heartbeat !== false) {
-      sendHeartbeat(
-        'process',
-        this.endpoint,
-        { environment: this.environment, release: this.release ?? null, runtime: 'node' },
-        '@argos/browser/server',
-        this.log,
-      );
+    if (options.heartbeat !== false && !beatRunning) {
+      beatRunning = true;
+      this.ownsBeat = true;
+      const configured = options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL;
+      if (configured !== false && configured > 0) {
+        // Clamp the beat with the declaration: promising a slower cadence than
+        // the one sent would get a healthy process marked missed.
+        const every = Math.min(configured, MAX_HEARTBEAT_INTERVAL);
+        this.declaredIntervalSeconds = Math.max(60, Math.ceil(every / 60_000) * 60);
+        this.scheduleBeat(every);
+      }
+      this.beat();
     }
+  }
+
+  /**
+   * Stops the periodic heartbeat. Call `flush()` first when events are pending:
+   * this cancels the timer and sends nothing.
+   */
+  close(): void {
+    this.closed = true;
+    if (this.beatTimer !== undefined) {
+      clearTimeout(this.beatTimer);
+      this.beatTimer = undefined;
+    }
+    if (this.ownsBeat) {
+      beatRunning = false;
+      this.ownsBeat = false;
+    }
+  }
+
+  /** A fresh period per beat: `sendHeartbeat` dedupes per realm, and only the
+   *  process owner beats, so a unique token is enough to let repeats through. */
+  private beat(): void {
+    beatsSent += 1;
+    sendHeartbeat(
+      `process-${String(beatsSent)}`,
+      this.endpoint,
+      {
+        environment: this.environment,
+        release: this.release ?? null,
+        runtime: 'node',
+        interval_seconds: this.declaredIntervalSeconds,
+      },
+      '@argos/browser/server',
+      this.log,
+    );
+  }
+
+  private scheduleBeat(every: number): void {
+    const wait = Math.round(every * (1 - HEARTBEAT_JITTER + Math.random() * HEARTBEAT_JITTER * 2));
+    const timer = setTimeout(() => {
+      if (this.closed) return;
+      this.beat();
+      this.scheduleBeat(every);
+    }, wait);
+    // Background housekeeping must never be the reason a process stays alive.
+    timer.unref();
+    this.beatTimer = timer;
   }
 
   /**

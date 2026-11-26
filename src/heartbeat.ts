@@ -14,6 +14,10 @@ export interface HeartbeatPayload {
   environment: string;
   release: string | null;
   runtime: 'browser' | 'node';
+  /** Server only: the cadence this sender promises, in seconds. Ingest turns a
+   *  declared cadence into the check-in of a keepalive monitor; a beat without
+   *  one only proves an install. */
+  interval_seconds?: number;
   sdk: SdkInfo;
   sentry: SdkInfo | null;
 }
@@ -48,6 +52,9 @@ export function detectSentry(): SdkInfo | null {
 
 // Per SDK name: the server and agents halves of one process are separate components.
 const sent = new Map<string, string>();
+
+// A periodic beat repeats the same upgrade notice; the developer needs it once.
+const warned = new Set<string>();
 
 /** -1, 0 or 1; a pre-release tail is ignored. */
 export function compareVersions(left: string, right: string): number {
@@ -117,7 +124,10 @@ export function sendHeartbeat(
         environment: payload.environment,
         runtime: payload.runtime,
       });
-      if (notice) console.warn(notice);
+      if (notice !== null && !warned.has(notice)) {
+        warned.add(notice);
+        console.warn(notice);
+      }
     });
   }, 0);
 }
