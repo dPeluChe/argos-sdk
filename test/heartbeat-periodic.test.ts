@@ -22,6 +22,12 @@ afterEach(() => {
 
 const beats = () => fetchMock.mock.calls.length;
 
+const body = (index: number): Record<string, unknown> =>
+  JSON.parse((fetchMock.mock.calls[index]?.[1] as RequestInit).body as string) as Record<
+    string,
+    unknown
+  >;
+
 describe('periodic heartbeat', () => {
   it('beats on the configured interval, not only at startup', async () => {
     const { initServer } = await server();
@@ -33,6 +39,26 @@ describe('periodic heartbeat', () => {
     // Jitter is ±10%, so ten seconds hold nine to eleven periodic beats.
     expect(beats()).toBeGreaterThanOrEqual(10);
     expect(beats()).toBeLessThanOrEqual(12);
+    instance.close();
+  });
+
+  it('declares the cadence the monitor will hold it to', async () => {
+    const { initServer } = await server();
+    const instance = initServer({ dsn: DSN, heartbeatInterval: 1000 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    // A sub-minute interval still declares a whole minute: the schedule is
+    // minute-granular, and the expectation must never be shorter than the beat.
+    expect(body(0).interval_seconds).toBe(60);
+    instance.close();
+  });
+
+  it('rounds an irregular interval up to whole minutes', async () => {
+    const { initServer } = await server();
+    const instance = initServer({ dsn: DSN, heartbeatInterval: 90_000 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(body(0).interval_seconds).toBe(120);
     instance.close();
   });
 
@@ -67,6 +93,8 @@ describe('periodic heartbeat', () => {
     const instance = initServer({ dsn: DSN, heartbeatInterval: false });
     await vi.advanceTimersByTimeAsync(1);
     expect(beats()).toBe(1);
+    // No repeat means no cadence to declare, so no monitor either.
+    expect(body(0)).not.toHaveProperty('interval_seconds');
 
     await vi.advanceTimersByTimeAsync(120_000);
     expect(beats()).toBe(1);

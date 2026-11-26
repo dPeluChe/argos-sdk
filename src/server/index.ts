@@ -42,6 +42,7 @@ export class ArgosServer {
   private beatTimer?: ReturnType<typeof setTimeout>;
   private closed = false;
   private ownsBeat = false;
+  private declaredIntervalSeconds?: number;
 
   constructor(options: InitOptions) {
     this.endpoint = resolveEndpoint(options);
@@ -52,9 +53,14 @@ export class ArgosServer {
     if (options.heartbeat !== false && !beatRunning) {
       beatRunning = true;
       this.ownsBeat = true;
-      this.beat();
       const every = options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL;
-      if (every !== false && every > 0) this.scheduleBeat(every);
+      if (every !== false && every > 0) {
+        // The monitor schedule is minute-granular: declare the next whole minute
+        // so the expectation is never shorter than the beat actually sent.
+        this.declaredIntervalSeconds = Math.min(3600, Math.max(60, Math.ceil(every / 60_000) * 60));
+        this.scheduleBeat(every);
+      }
+      this.beat();
     }
   }
 
@@ -81,7 +87,12 @@ export class ArgosServer {
     sendHeartbeat(
       `process-${String(beatsSent)}`,
       this.endpoint,
-      { environment: this.environment, release: this.release ?? null, runtime: 'node' },
+      {
+        environment: this.environment,
+        release: this.release ?? null,
+        runtime: 'node',
+        interval_seconds: this.declaredIntervalSeconds,
+      },
       '@argos/browser/server',
       this.log,
     );

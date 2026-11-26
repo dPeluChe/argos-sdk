@@ -14,6 +14,10 @@ export interface HeartbeatPayload {
   environment: string;
   release: string | null;
   runtime: 'browser' | 'node';
+  /** Server only: the cadence this sender promises, in seconds. Ingest turns a
+   *  declared cadence into the check-in of a keepalive monitor; a beat without
+   *  one only proves an install. */
+  interval_seconds?: number;
   sdk: SdkInfo;
   sentry: SdkInfo | null;
 }

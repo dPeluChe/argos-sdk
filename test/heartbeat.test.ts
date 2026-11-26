@@ -58,6 +58,7 @@ describe('server heartbeat', () => {
       environment: 'production',
       release: 'api@1.2.3',
       runtime: 'node',
+      interval_seconds: 60,
       sdk: { name: '@argos/browser/server', version },
       sentry: null,
     });
